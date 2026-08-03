@@ -8,6 +8,11 @@ through the full tool-calling loop, not just plain chat
 
 <img width="3680" height="2592" alt="ray-so-export (1)" src="https://github.com/user-attachments/assets/01e7ed7f-35a5-413e-9b26-27ac823d7c74" />
 
+> [!NOTE]
+> The [Open WebUI SDK](https://github.com/vedmaka/openwebui-sdk), the
+> [Open WebUI CLI](https://github.com/vedmaka/openwebui-sdk/tree/master/cli)
+> and this MCP server are tested against **Open WebUI 0.6.5**
+
 ## Quick start
 
 ```bash
@@ -152,7 +157,7 @@ automatically:
    client passes
 
 Optionally, if you use OWUI + MCP as a knowledge base for your agent, install
-the [Proactive ask skill](skills/owui-proactive-ask/SKILL.md) to instruct the agent to 
+the [Proactive ask skill](skills/owui-proactive-ask/SKILL.md) to instruct the agent to
 consult this MCP proactively instead of only when it feels like it.
 
 ## Tools
