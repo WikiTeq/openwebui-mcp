@@ -39,3 +39,10 @@ exclude-newer = "7 days"
 
 [tool.uv.exclude-newer-package]
 openwebui-sdk = false
+
+# Tell static analyzers (pyright/pylance) this is a src-layout package so the
+# intra-package relative imports in __main__.py / cli.py resolve.
+[tool.pyright]
+include = ["src"]
+extraPaths = ["src"]
+reportMissingImports = "none"
