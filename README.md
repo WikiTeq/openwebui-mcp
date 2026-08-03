@@ -48,6 +48,23 @@ Token-based, in two layers
    Note: MCP OAuth discovery wants an HTTPS endpoint, so http deployments
    should rely on transport security or a private network instead
 
+## TLS to Open WebUI
+
+If Open WebUI is served over https with a certificate the process does not
+trust (self-signed, private/Traefik CA, or a MITM proxy CA), the SDK raises
+`CERTIFICATE_VERIFY_FAILED`. Fix by trusting the right CA, never by
+silently disabling checks unless you must:
+
+```env
+OPENWEBUI_CA_BUNDLE=/path/to/ca.pem     # trust a specific PEM CA (covers JSON routes + Socket.IO tool loop)
+OPENWEBUI_SSL_VERIFY=false              # skip verification (JSON routes only; not recommended)
+```
+
+The CA bundle path is applied as `SSL_CERT_FILE`, so all Python TLS callers
+(urllib and aiohttp) pick it up. `OPENWEBUI_SSL_VERIFY=false` only relaxes the
+urllib (JSON) routes; the Socket.IO tool loop still verifies, so prefer the CA
+bundle for self-signed servers
+
 ## Install
 
 ```bash
@@ -69,6 +86,8 @@ defined env var in each alias list
 | MCP bearer token | `OPENWEBUI_MCP_TOKEN`, `OWUI_MCP_TOKEN` | none |
 | Transport | `OPENWEBUI_MCP_TRANSPORT` | `stdio` |
 | Chat timeout ms | `OWUI_TIMEOUT_MS` | `120000` |
+| Open WebUI CA bundle | `OPENWEBUI_CA_BUNDLE`, `OWUI_CA_BUNDLE` | none |
+| Skip TLS verify | `OPENWEBUI_SSL_VERIFY`, `OWUI_SSL_VERIFY` | `true` |
 
 ## Run
 
@@ -94,10 +113,22 @@ uv run openwebui-mcp --transport streamable-http --host 0.0.0.0 --port 8000
 }
 ```
 
+### Remote HTTP clients (codex, rmcp, ...)
+
+For `--transport streamable-http` the MCP endpoint lives at
+`/mcp`, so point the client URL at the full path:
+
+```text
+http://<host>:<port>/mcp
+```
+
+A bare `http://<host>:<port>` returns 404 on initialize. With `--transport sse`
+the endpoint is `/sse` instead
+
 ## Development
 
 ```bash
-uv run pytest          # 16 tests
+uv run pytest          # 22 tests
 uv run pyright src tests
 ```
 
@@ -106,7 +137,7 @@ is configured via `pyrightconfig.json` for that path
 
 ## Layout
 
-- `src/openwebui_mcp/server.py` - FastMCP server, the two tools, static token verifier
+- `src/openwebui_mcp/server.py` - FastMCP server, the two tools, TLS apply, static token verifier
 - `src/openwebui_mcp/config.py` - env-driven settings
 - `src/openwebui_mcp/__main__.py` - CLI entry point
-- `tests/` - config + server unit tests, incl. a protocol-level `call_tool` round trip
+- `tests/` - config + server + TLS unit tests, incl. a protocol-level `call_tool` round trip

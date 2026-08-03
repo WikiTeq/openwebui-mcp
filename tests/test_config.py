@@ -16,6 +16,8 @@ _AMBIENT = (
     "OWUI_API_KEY",
     "OWUI_TOKEN",
     "OWUI_TIMEOUT_MS",
+    "OPENWEBUI_SSL_VERIFY",
+    "OPENWEBUI_CA_BUNDLE",
 )
 
 
@@ -78,3 +80,20 @@ def test_from_env_overrides_win(monkeypatch: pytest.MonkeyPatch) -> None:
     s = Settings.from_env(transport="streamable-http", name="custom")
     assert s.transport == "streamable-http"
     assert s.name == "custom"
+
+
+def test_tls_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
+    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
+    monkeypatch.setenv("OPENWEBUI_SSL_VERIFY", "false")
+    monkeypatch.setenv("OPENWEBUI_CA_BUNDLE", "/etc/owui-ca.pem")
+    s = Settings.from_env()
+    assert s.ssl_verify is False
+    assert s.ssl_ca_bundle == "/etc/owui-ca.pem"
+
+
+def test_tls_verify_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
+    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
+    assert Settings.from_env().ssl_verify is True
+    assert Settings.from_env().ssl_ca_bundle is None

@@ -20,6 +20,8 @@ _BASE_URL_VARS = ("OPENWEBUI_BASE_URL", "OPENWEBUI_URL", "OWUI_URL")
 _TOKEN_VARS = ("OPENWEBUI_API_KEY", "OPENWEBUI_TOKEN", "OWUI_API_KEY", "OWUI_TOKEN")
 _MCP_TOKEN_VARS = ("OPENWEBUI_MCP_TOKEN", "OWUI_MCP_TOKEN")
 _TRANSPORT_VARS = ("OPENWEBUI_MCP_TRANSPORT", "OWUI_MCP_TRANSPORT")
+_SSL_CA_VARS = ("OPENWEBUI_CA_BUNDLE", "OWUI_CA_BUNDLE")
+_SSL_VERIFY_VARS = ("OPENWEBUI_SSL_VERIFY", "OWUI_SSL_VERIFY")
 
 # MCP transports FastMCP can run on; validated at config time.
 Transport = Literal["stdio", "sse", "streamable-http"]
@@ -69,6 +71,11 @@ class Settings:
     transport: Transport = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
+    # TLS options for talking to Open WebUI over https. ``ssl_ca_bundle`` is a
+    # PEM CA file to trust (private/Traefik CA, or this env's mitm CA);
+    # ``ssl_verify`` disables certificate verification for the JSON routes.
+    ssl_ca_bundle: str | None = None
+    ssl_verify: bool = True
 
     @classmethod
     def from_env(cls, **overrides: str) -> Settings:
@@ -102,6 +109,11 @@ class Settings:
             port = int(overrides.get("port", "8000"))
         except ValueError as exc:
             raise ValueError(f"invalid port: {exc}") from exc
+        verify_raw = (
+            overrides.get("ssl_verify")
+            or _first(*_SSL_VERIFY_VARS, default="true")
+            or "true"
+        )
         return cls(
             base_url=base_url,
             token=token,
@@ -111,4 +123,6 @@ class Settings:
             timeout_ms=timeout_ms,
             host=overrides.get("host", "127.0.0.1"),
             port=port,
+            ssl_ca_bundle=overrides.get("ssl_ca_bundle") or _first(*_SSL_CA_VARS),
+            ssl_verify=verify_raw.strip().lower() not in ("0", "false", "no", "off"),
         )

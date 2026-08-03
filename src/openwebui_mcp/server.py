@@ -21,6 +21,8 @@ running - otherwise ``asyncio.run`` would raise "already running".
 
 from __future__ import annotations
 
+import os
+import ssl
 from typing import Any
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -64,6 +66,22 @@ def _mcp_endpoint_url(settings: Settings) -> AnyHttpUrl:
     return AnyHttpUrl(f"http://{settings.host}:{settings.port}/mcp")
 
 
+def apply_tls_settings(settings: Settings) -> None:
+    """Apply TLS trust config to this process before any SDK request.
+
+    ``OPENWEBUI_CA_BUNDLE`` - set ``SSL_CERT_FILE`` so every
+    ``create_default_context`` caller (urllib for the JSON routes, aiohttp for
+    the Socket.IO tool loop) trusts the given PEM CA. ``OPENWEBUI_SSL_VERIFY``
+    false - drop certificate verification for the JSON (urllib) routes against
+    self-signed / private-CA servers. No-op (and safe to call always) when
+    neither is configured.
+    """
+    if settings.ssl_ca_bundle:
+        os.environ["SSL_CERT_FILE"] = settings.ssl_ca_bundle
+    if not settings.ssl_verify and hasattr(ssl, "_create_default_https_context"):
+        ssl._create_default_https_context = ssl._create_unverified_context
+
+
 def create_server(
     settings: Settings, *, client: OpenWebUIClient | None = None
 ) -> FastMCP:
@@ -73,6 +91,7 @@ def create_server(
     ``settings`` (base URL + bearer token). When ``settings.mcp_token`` is set
     the MCP endpoint requires ``Authorization: Bearer <token>`` on requests.
     """
+    apply_tls_settings(settings)
     owui = client or OpenWebUIClient(base_url=settings.base_url, token=settings.token)
 
     mcp = FastMCP(
