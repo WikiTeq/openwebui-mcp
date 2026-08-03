@@ -93,7 +93,9 @@ def test_ask_requires_model_and_prompt_params() -> None:
 
 
 @pytest.mark.anyio
-async def test_ask_with_tools_calls_sockets_runner(sockets_calls: list[dict[str, Any]]) -> None:
+async def test_ask_with_tools_calls_sockets_runner(
+    sockets_calls: list[dict[str, Any]],
+) -> None:
     """Tools path must await sockets.run_chat_with_tools directly, not owui.run_chat."""
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))

@@ -30,6 +30,8 @@ import asyncio
 import logging
 import os
 import ssl
+import threading
+from concurrent.futures import Future
 from typing import Any
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -89,6 +91,40 @@ def apply_tls_settings(settings: Settings) -> None:
         os.environ["SSL_CERT_FILE"] = settings.ssl_ca_bundle
     if not settings.ssl_verify and hasattr(ssl, "_create_default_https_context"):
         ssl._create_default_https_context = ssl._create_unverified_context
+
+
+def run_on_dedicated_loop(coro_fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run an async coroutine on a dedicated thread + its own fresh event loop.
+
+    FastMCP streamable-http executes tool handlers inside an anyio cancel
+    scope that tears down python-socketio background tasks, so the SDK's
+    Socket.IO receive loop never pumps (the chat completes on the server but
+    completion events never arrive -> the tool hangs). The CLI works because it
+    runs ``asyncio.run`` on a loop it fully owns in the main thread.
+
+    This mirrors the CLI: spawn a plain thread, build a fresh event loop there,
+    run the coroutine to completion, and propagate the result/exception. The
+    aiohttp session, the socketio AsyncClient and the completion event all live
+    on that one loop, with no anyio parent to cancel them.
+    """
+    result: Future[Any] = Future()
+
+    def _runner() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.set_result(loop.run_until_complete(coro_fn(*args, **kwargs)))
+        except BaseException as exc:  # noqa: BLE001 - propagate to caller
+            result.set_exception(exc)
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    return result.result()  # blocks the calling (FastMCP) coroutine until done
 
 
 def create_server(
@@ -208,14 +244,18 @@ def create_server(
         started = time.monotonic()
         try:
             if tool_ids:
-                # Await the SDK's async Socket.IO runner DIRECTLY on this event
-                # loop - exactly how the CLI awaits it on its loop. Nesting the
-                # SDK's asyncio.run inside asyncio.to_thread broke event
-                # delivery (socket background tasks never pumped); running on
-                # this loop keeps the aiohttp session + socketio client + the
-                # completion event on one loop, so chat-events flow back.
-                data = await asyncio.wait_for(
-                    sockets.run_chat_with_tools(
+                # Run the SDK's async Socket.IO runner on a DEDICATED thread
+                # with its own fresh event loop (mirrors the CLI, which owns its
+                # loop). FastMCP streamable-http runs handlers inside an anyio
+                # cancel scope that tears down python-socketio background tasks
+                # - so awaiting the runner directly on the FastMCP loop starves
+                # the socket receive path and the tool hangs. A dedicated loop
+                # in a plain thread has no anyio parent, so the aiohttp session,
+                # the socketio client and the completion event all live on one
+                # loop and chat-events flow back.
+                def _run() -> dict[str, Any]:
+                    data = run_on_dedicated_loop(
+                        sockets.run_chat_with_tools,
                         base_url=settings.base_url,
                         token=settings.token,
                         model=model,
@@ -229,14 +269,19 @@ def create_server(
                         on_reasoning=lambda s: logger.debug(
                             "ask[%s]: reasoning: %s", model, (s or "")[:200]
                         ),
-                    ),
-                    timeout=timeout_s + 60,
+                    )
+                    return {
+                        "answer": data.get("answer", ""),
+                        "reasoning": data.get("reasoning"),
+                        "tool_calls": data.get("tool_calls", []),
+                    }
+
+                # Offload the blocking run_on_dedicated_loop call so the
+                # FastMCP loop stays responsive while the worker thread drives
+                # the SDK loop to completion.
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_run), timeout=timeout_s + 60
                 )
-                result = {
-                    "answer": data.get("answer", ""),
-                    "reasoning": data.get("reasoning"),
-                    "tool_calls": data.get("tool_calls", []),
-                }
             else:
                 # No tools: plain HTTP streaming path (blocking) - offload.
                 result = await asyncio.to_thread(
