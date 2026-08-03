@@ -1,0 +1,15 @@
+# Keep the build context lean; the SDK+CLI sources are all the image needs.
+.git
+.venv
+.venv-docker
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.egg-info
+build
+dist
+.ruff_cache
+.codegraph
+.scratch
+cli/.venv
+.github
