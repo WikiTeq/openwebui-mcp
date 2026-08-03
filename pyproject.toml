@@ -11,9 +11,10 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Alexey @vedmaka" }]
 dependencies = [
-    "mcp>=1.20",
-    "openwebui-sdk>=0.1.1",
-    "python-dotenv>=1.0",
+  # mcp 2.x moved `mcp.server.fastmcp` away; keep the 1.x line that has it
+  "mcp>=1.20,<2",
+  "openwebui-sdk>=0.1.1",
+  "python-dotenv>=1.0",
 ]
 
 [project.scripts]
@@ -26,10 +27,7 @@ where = ["src"]
 openwebui_mcp = ["py.typed"]
 
 [dependency-groups]
-dev = [
-    "pytest>=8.0",
-    "pyright>=1.1.400",
-]
+dev = ["pytest>=8.0", "pyright>=1.1.400", "ruff==0.16.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -39,6 +37,7 @@ exclude-newer = "7 days"
 
 [tool.uv.exclude-newer-package]
 openwebui-sdk = false
+ruff = false
 
 # Tell static analyzers (pyright/pylance) this is a src-layout package so the
 # intra-package relative imports in __main__.py / cli.py resolve.

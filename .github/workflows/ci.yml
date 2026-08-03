@@ -39,14 +39,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.13"
-      - name: Install lint tools
-        run: pip install "ruff==0.16.1" pyright
-      - name: Install project deps for typechecking
-        run: pip install -e .
+      - name: Install uv
+        run: pip install uv
+      - name: Install deps from lockfile
+        run: uv sync --group dev
       - name: Ruff
-        run: ruff check src tests
+        run: uv run ruff check src tests
       - name: Pyright
-        run: pyright src
+        run: uv run pyright src tests
 
   test:
     name: Tests (py ${{ matrix.python-version }})
@@ -64,12 +64,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: |
-          pip install -e .
-          pip install pytest
+      - name: Install uv
+        run: pip install uv
+      - name: Install deps from lockfile
+        run: uv sync --group dev
       - name: Tests
-        run: python -m pytest -q
+        run: uv run pytest -q
 
   publish:
     name: Publish openwebui-mcp (PyPI)
