@@ -134,6 +134,27 @@ The skill pairs with `OPENWEBUI_ASK_DESCRIPTION` and `OPENWEBUI_INSTRUCTIONS`
 (see Configure): the skill makes the agent call `ask`, while the description
 and instructions tell the model why and when.
 
+## Common usage
+
+The typical setup is a single specialized model per use case. Model the remote
+side of this MCP as a domain expert and route every question to it
+automatically:
+
+1. **Create a specialized model** in the Open WebUI workspace, e.g. a
+   "my-kb-model" an expert with a knowledge base and tools attached
+2. **Match the tool description to the model** - set `OPENWEBUI_ASK_DESCRIPTION`
+   to what the model does ("ask the expert model...") so agents know when to
+   call it (see Configure)
+3. **Select the model** with `OPENWEBUI_DEFAULT_MODEL=my-kb-model` (the id from
+   `list_models` or from the UI, listed in gray under the model name)
+4. **Enforce it** with `OPENWEBUI_ENFORCE_DEFAULT_MODEL=true` so every `ask`
+   call goes to the selected model automatically, ignoring whatever model the
+   client passes
+
+Optionally, if you use OWUI + MCP as a knowledge base for your agent, install
+the [Proactive ask skill](skills/owui-proactive-ask/SKILL.md) to instruct the agent to 
+consult this MCP proactively instead of only when it feels like it.
+
 ## Tools
 
 Exactly two tools are exposed
