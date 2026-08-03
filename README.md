@@ -1,7 +1,7 @@
 # openwebui-mcp
 
-Open WebUI MCP server built on [FastMCP](https://github.com/modelcontextprotocol/python-sdk)
-and the [openwebui-sdk](https://github.com/vedmaka/openwebui-sdk) library
+Open WebUI MCP server built on [FastMCP](https://gofastmcp.com)
+(standalone, v4) and the [openwebui-sdk](https://github.com/vedmaka/openwebui-sdk) library
 
 Lets any MCP client (Claude Desktop, Cursor, agents) ask Open WebUI models
 through the full tool-calling loop, not just plain chat

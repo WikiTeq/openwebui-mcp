@@ -33,11 +33,9 @@ import os
 import ssl
 from typing import Any
 
-from mcp.server.auth.provider import AccessToken, TokenVerifier
-from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.server.auth import AccessToken, AuthProvider
 from openwebui_sdk import OpenWebUIClient
-from pydantic import AnyHttpUrl
 
 from openwebui_mcp.config import Settings
 
@@ -48,10 +46,16 @@ logger = logging.getLogger(__name__)
 _TOOL_FIELDS = "tool_ids"
 
 
-class StaticTokenVerifier(TokenVerifier):
-    """Accepts exactly one configured bearer token (constant-time compare)."""
+class StaticTokenVerifier(AuthProvider):
+    """Accepts exactly one configured bearer token (constant-time compare).
+
+    FastMCP 4 wraps everything auth-related in a single ``AuthProvider``; the
+    verifier IS the provider, so subclassing gives us the same fixed bearer
+    token behavior the SDK v1 verifier had, without a real OAuth server.
+    """
 
     def __init__(self, token: str) -> None:
+        super().__init__()
         self._token = token
 
     async def verify_token(self, token: str) -> AccessToken | None:
@@ -65,15 +69,6 @@ class StaticTokenVerifier(TokenVerifier):
             scopes=["all"],
             subject=token,
         )
-
-
-def _mcp_endpoint_url(settings: Settings) -> AnyHttpUrl:
-    """Dummy discovery URL used by AuthSettings when MCP token auth is on.
-
-    Bearer verification via ``StaticTokenVerifier`` never consults OAuth
-    discovery, so the URL only needs to be syntactically valid.
-    """
-    return AnyHttpUrl(f"http://{settings.host}:{settings.port}/mcp")
 
 
 def ask_description(fn: Any, settings: Settings) -> str:
@@ -120,19 +115,7 @@ def create_server(
     mcp = FastMCP(
         settings.name,
         instructions=settings.instructions,
-        host=settings.host,
-        port=settings.port,
-        auth=(
-            AuthSettings(
-                issuer_url=_mcp_endpoint_url(settings),
-                resource_server_url=_mcp_endpoint_url(settings),
-            )
-            if settings.mcp_token
-            else None
-        ),
-        token_verifier=(
-            StaticTokenVerifier(settings.mcp_token) if settings.mcp_token else None
-        ),
+        auth=(StaticTokenVerifier(settings.mcp_token) if settings.mcp_token else None),
     )
 
     def _list_models_sync() -> list[dict[str, Any]]:

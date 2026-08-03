@@ -62,7 +62,8 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = Settings.from_env(**overrides)
     server = create_server(settings)
-    server.run(transport=settings.transport)
+    # host/port live on run() in FastMCP 4 (constructor is transport-agnostic)
+    server.run(transport=settings.transport, host=settings.host, port=settings.port)
     return 0
 
 

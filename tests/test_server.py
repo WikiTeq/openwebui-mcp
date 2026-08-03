@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.tools.function_tool import FunctionTool
 from openwebui_sdk import OpenWebUIClient
 from openwebui_sdk.chat import ChatResult
 from openwebui_sdk.models import Model
@@ -67,10 +68,11 @@ def sockets_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return calls
 
 
-def _tool_fn(mcp: FastMCP, name: str) -> Any:
-    tool = mcp._tool_manager.get_tool(name)
+async def _call(mcp: FastMCP, name: str, **kwargs: Any) -> Any:
+    """Await a registered tool's underlying function with kwargs."""
+    tool = cast(FunctionTool, await mcp.get_tool(name))
     assert tool is not None, f"tool {name!r} not registered"
-    return tool.fn
+    return await tool.fn(**kwargs)
 
 
 def _fake_settings(**kw: Any) -> Settings:
@@ -90,17 +92,20 @@ def test_server_instructions_field() -> None:
     assert plain.instructions is None
 
 
-def test_server_exposes_both_tools() -> None:
+@pytest.mark.anyio
+async def test_server_exposes_both_tools() -> None:
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
-    names = {t.name for t in server._tool_manager.list_tools()}
+    names = {t.name for t in await server.list_tools()}
     assert names == {"ask", "list_models"}
 
 
-def test_ask_params_optionality() -> None:
+@pytest.mark.anyio
+async def test_ask_params_optionality() -> None:
     """model is optional (falls back to OPENWEBUI_DEFAULT_MODEL); prompt required."""
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
-    tool = server._tool_manager.get_tool("ask")
+    tool = await server.get_tool("ask")
     assert tool is not None
+    assert tool.parameters is not None
     assert "prompt" in tool.parameters.get("required", [])
     assert "model" not in tool.parameters.get("required", [])
     # history is an optional array param, exposed for context carry-over
@@ -112,14 +117,16 @@ def test_ask_params_optionality() -> None:
     assert "array" in schema_types
 
 
-def test_ask_description_env_override() -> None:
+@pytest.mark.anyio
+async def test_ask_description_env_override() -> None:
     """ENV replaces only the first summary line; the rest always stays."""
     server = create_server(
         _fake_settings(ask_description="Always answer in German"),
         client=cast(OpenWebUIClient, FakeClient()),
     )
-    tool = server._tool_manager.get_tool("ask")
+    tool = await server.get_tool("ask")
     assert tool is not None
+    assert tool.description is not None
     # env text is the new first line
     assert tool.description.startswith("Always answer in German")
     # the default summary line is replaced (not just prepended)
@@ -129,11 +136,13 @@ def test_ask_description_env_override() -> None:
     assert "history" in tool.description
 
 
-def test_ask_description_falls_back_to_docstring() -> None:
+@pytest.mark.anyio
+async def test_ask_description_falls_back_to_docstring() -> None:
     """No ENV description -> the built-in docstring is used verbatim."""
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
-    tool = server._tool_manager.get_tool("ask")
+    tool = await server.get_tool("ask")
     assert tool is not None
+    assert tool.description is not None
     assert tool.description.startswith(
         "Ask an Open WebUI model a question, with tool support."
     )
@@ -151,7 +160,7 @@ async def test_ask_with_default_model(
         _fake_settings(default_model="m-default"),
         client=cast(OpenWebUIClient, fake),
     )
-    out = await _tool_fn(server, "ask")(prompt="hi", use_tools=True)
+    out = await _call(server, "ask", prompt="hi", use_tools=True)
     assert fake.resolve_calls == ["m-default"]
     assert sockets_calls[0]["model"] == "m-default"
     assert out == {"answer": "hi", "reasoning": "rt", "tool_calls": [{"name": "x"}]}
@@ -163,7 +172,7 @@ async def test_ask_without_model_or_default_raises() -> None:
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
     with pytest.raises(ValueError, match="OPENWEBUI_DEFAULT_MODEL"):
-        await _tool_fn(server, "ask")(prompt="hi", use_tools=False)
+        await _call(server, "ask", prompt="hi", use_tools=False)
     assert fake.chat_calls == []
 
 
@@ -175,7 +184,7 @@ async def test_ask_with_default_model_no_tools() -> None:
         _fake_settings(default_model="m-default"),
         client=cast(OpenWebUIClient, fake),
     )
-    await _tool_fn(server, "ask")(prompt="hi", use_tools=False)
+    await _call(server, "ask", prompt="hi", use_tools=False)
     assert fake.chat_calls[0]["model"] == "m-default"
 
 
@@ -190,9 +199,7 @@ async def test_ask_enforce_default_model_overrides_input(
         client=cast(OpenWebUIClient, fake),
     )
     # caller passes a different model -> must be ignored
-    out = await _tool_fn(server, "ask")(
-        prompt="hi", model="caller-picked", use_tools=True
-    )
+    out = await _call(server, "ask", prompt="hi", model="caller-picked", use_tools=True)
     assert fake.resolve_calls == ["m-default"]
     assert sockets_calls[0]["model"] == "m-default"
     assert out == {"answer": "hi", "reasoning": "rt", "tool_calls": [{"name": "x"}]}
@@ -207,9 +214,7 @@ async def test_ask_enforce_without_default_raises() -> None:
         client=cast(OpenWebUIClient, fake),
     )
     with pytest.raises(ValueError, match="OPENWEBUI_DEFAULT_MODEL"):
-        await _tool_fn(server, "ask")(
-            prompt="hi", model="caller-picked", use_tools=True
-        )
+        await _call(server, "ask", prompt="hi", model="caller-picked", use_tools=True)
     assert fake.resolve_calls == []
 
 
@@ -218,7 +223,9 @@ async def test_ask_history_prepended() -> None:
     """history turns come before prompt (after system) so remote model has context."""
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    await _tool_fn(server, "ask")(
+    await _call(
+        server,
+        "ask",
         prompt="Now question B",
         model="m1",
         system="Be terse",
@@ -243,7 +250,9 @@ async def test_ask_history_passes_through_tools_path(
     """history flows to the socket runner too, not just the HTTP path."""
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    await _tool_fn(server, "ask")(
+    await _call(
+        server,
+        "ask",
         prompt="B",
         model="m1",
         history=[{"role": "user", "content": "A"}],
@@ -262,8 +271,8 @@ async def test_ask_with_tools_calls_sockets_runner(
     """Tools path must await sockets.run_chat_with_tools directly, not owui.run_chat."""
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    out = await _tool_fn(server, "ask")(
-        model="m1", prompt="What time is it?", use_tools=True
+    out = await _call(
+        server, "ask", model="m1", prompt="What time is it?", use_tools=True
     )
     # resolve_tools was called
     assert fake.resolve_calls == ["m1"]
@@ -282,8 +291,8 @@ async def test_ask_no_tools_uses_http_path() -> None:
     """No tools -> plain HTTP streaming via owui.run_chat (offloaded to a thread)."""
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    await _tool_fn(server, "ask")(
-        model="m1", prompt="hi", system="Be terse", use_tools=False
+    await _call(
+        server, "ask", model="m1", prompt="hi", system="Be terse", use_tools=False
     )
     call = fake.chat_calls[0]
     assert call["messages"] == [
@@ -297,8 +306,8 @@ async def test_ask_no_tools_uses_http_path() -> None:
 async def test_ask_passes_temperature() -> None:
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    await _tool_fn(server, "ask")(
-        model="m1", prompt="hi", temperature=0.5, use_tools=False
+    await _call(
+        server, "ask", model="m1", prompt="hi", temperature=0.5, use_tools=False
     )
     assert fake.chat_calls[0]["temperature"] == 0.5
 
@@ -308,7 +317,10 @@ async def test_list_models_shape() -> None:
     server = create_server(
         _fake_settings(), client=cast(OpenWebUIClient, FakeClient(models=MS_SAMPLE))
     )
-    out = await _tool_fn(server, "list_models")()
+    out = await _call(
+        server,
+        "list_models",
+    )
     assert out == [
         {"id": "m1", "name": "Model One", "tool_ids": ["t1", "t2"]},
         {"id": "m2", "name": "Model Two", "tool_ids": []},
@@ -322,7 +334,7 @@ async def test_ask_timeout_passed_in_seconds() -> None:
     server = create_server(
         _fake_settings(timeout_ms=120_000), client=cast(OpenWebUIClient, fake)
     )
-    await _tool_fn(server, "ask")(model="m1", prompt="hi", use_tools=False)
+    await _call(server, "ask", model="m1", prompt="hi", use_tools=False)
     assert fake.chat_calls[0]["timeout"] == 120  # seconds, not 120000
 
 
@@ -334,7 +346,7 @@ async def test_ask_with_tools_timeout_passed_in_seconds(
     server = create_server(
         _fake_settings(timeout_ms=120_000), client=cast(OpenWebUIClient, fake)
     )
-    await _tool_fn(server, "ask")(model="m1", prompt="hi", use_tools=True)
+    await _call(server, "ask", model="m1", prompt="hi", use_tools=True)
     assert sockets_calls[0]["timeout"] == 120
 
 
@@ -342,13 +354,12 @@ def test_mcp_auth_wired_when_token_set() -> None:
     server = create_server(
         _fake_settings(mcp_token="s3cret"), client=cast(OpenWebUIClient, FakeClient())
     )
-    verifier = server._token_verifier
-    assert verifier is not None
+    assert isinstance(server.auth, StaticTokenVerifier)
 
 
 def test_mcp_auth_absent_without_token() -> None:
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
-    assert server._token_verifier is None
+    assert server.auth is None
 
 
 @pytest.mark.anyio
@@ -366,19 +377,18 @@ async def test_call_tool_end_to_end(sockets_calls: list[dict[str, Any]]) -> None
     fake = FakeClient(models=MS_SAMPLE, tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
 
-    content, structured = cast(Any, await server.call_tool("list_models", {}))
-    assert isinstance(content, list)
-    results = structured["result"]
-    assert [r["id"] for r in results] == ["m1", "m2"]
+    res = await server.call_tool("list_models", {})
+    assert not res.is_error
+    assert res.structured_content is not None
+    assert [r["id"] for r in res.structured_content["result"]] == ["m1", "m2"]
 
-    _out, structured_out = cast(
-        Any,
-        await server.call_tool(
-            "ask",
-            {"model": "m1", "prompt": "what is 6*7?", "use_tools": True},
-        ),
+    res_b = await server.call_tool(
+        "ask",
+        {"model": "m1", "prompt": "what is 6*7?", "use_tools": True},
     )
+    assert not res_b.is_error
     assert fake.resolve_calls == ["m1"]
     assert sockets_calls[0]["tool_ids"] == ["t1"]
     # sockets fake returns answer "hi"
-    assert structured_out["answer"] == "hi"
+    assert res_b.structured_content is not None
+    assert res_b.structured_content["answer"] == "hi"

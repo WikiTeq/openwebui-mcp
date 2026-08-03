@@ -11,8 +11,9 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Alexey @vedmaka" }]
 dependencies = [
-  # mcp 2.x moved `mcp.server.fastmcp` away; keep the 1.x line that has it
-  "mcp>=1.20,<2",
+  # Standalone FastMCP (gofastmcp.com) - builds on MCP SDK v2; keeps the
+  # high-level FastMCP API where mcp 2.x removed mcp.server.fastmcp
+  "fastmcp==4.0.0b1",
   "openwebui-sdk>=0.1.1",
   "python-dotenv>=1.0",
 ]
@@ -34,10 +35,16 @@ testpaths = ["tests"]
 
 [tool.uv]
 exclude-newer = "7 days"
+# fastmcp 4 is a prerelease; allow resolving prereleases
+prerelease = "allow"
 
 [tool.uv.exclude-newer-package]
 openwebui-sdk = false
 ruff = false
+fastmcp = false
+fastmcp-slim = false
+mcp = false
+mcp_types = false
 
 # Tell static analyzers (pyright/pylance) this is a src-layout package so the
 # intra-package relative imports in __main__.py / cli.py resolve.
