@@ -193,9 +193,6 @@ Token-based, in two layers
    the MCP server itself require `Authorization: Bearer <token>` on every
    request. Unset, the endpoint is open to its listeners
 
-   Note: MCP OAuth discovery wants an HTTPS endpoint, so http deployments
-   should rely on transport security or a private network instead
-
 ## TLS to Open WebUI
 
 If Open WebUI is served over https with a certificate the process does not
@@ -215,12 +212,23 @@ bundle for self-signed servers
 
 ## Install
 
+Run straight from PyPI, no local checkout needed:
+
 ```bash
-uv sync           # creates .venv-docker, installs deps incl. openwebui-sdk from git
-uv run openwebui-mcp --help
+uvx openwebui-mcp --help
+```
+
+Or install it as a tool so the `openwebui-mcp` command is always available:
+
+```bash
+uv tool install openwebui-mcp
+openwebui-mcp --help
 ```
 
 Requires Python 3.11+
+
+Cloning the repo is only needed for development: `uv sync` (creates
+`.venv-docker`) then `uv run openwebui-mcp --help`
 
 ## Configure
 
