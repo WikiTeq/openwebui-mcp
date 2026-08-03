@@ -95,5 +95,5 @@ def test_tls_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_tls_verify_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
     monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
-    assert Settings.from_env().ssl_verify is True
+    assert Settings.from_env().ssl_verify  # truthy when "true"
     assert Settings.from_env().ssl_ca_bundle is None

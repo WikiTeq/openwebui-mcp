@@ -74,10 +74,13 @@ def test_ask_requires_model_and_prompt_params() -> None:
     assert "prompt" in tool.parameters.get("required", [])
 
 
-def test_ask_calls_client_with_tools_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.anyio
+async def test_ask_calls_client_with_tools_enabled() -> None:
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    out = _tool_fn(server, "ask")(model="m1", prompt="What time is it?", use_tools=True)
+    out = await _tool_fn(server, "ask")(
+        model="m1", prompt="What time is it?", use_tools=True
+    )
     assert fake.resolve_calls == ["m1"]
     call = fake.chat_calls[0]
     assert call["model"] == "m1"
@@ -86,10 +89,13 @@ def test_ask_calls_client_with_tools_enabled(monkeypatch: pytest.MonkeyPatch) ->
     assert out == {"answer": "hi", "reasoning": "rt", "tool_calls": [{"name": "x"}]}
 
 
-def test_ask_system_prompt_prepended() -> None:
+@pytest.mark.anyio
+async def test_ask_system_prompt_prepended() -> None:
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    _tool_fn(server, "ask")(model="m1", prompt="hi", system="Be terse", use_tools=False)
+    await _tool_fn(server, "ask")(
+        model="m1", prompt="hi", system="Be terse", use_tools=False
+    )
     call = fake.chat_calls[0]
     assert call["messages"] == [
         {"role": "system", "content": "Be terse"},
@@ -98,18 +104,22 @@ def test_ask_system_prompt_prepended() -> None:
     assert call["tool_ids"] == []
 
 
-def test_ask_passes_temperature() -> None:
+@pytest.mark.anyio
+async def test_ask_passes_temperature() -> None:
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    _tool_fn(server, "ask")(model="m1", prompt="hi", temperature=0.5, use_tools=False)
+    await _tool_fn(server, "ask")(
+        model="m1", prompt="hi", temperature=0.5, use_tools=False
+    )
     assert fake.chat_calls[0]["temperature"] == 0.5
 
 
-def test_list_models_shape() -> None:
+@pytest.mark.anyio
+async def test_list_models_shape() -> None:
     server = create_server(
         _fake_settings(), client=cast(OpenWebUIClient, FakeClient(models=MS_SAMPLE))
     )
-    out = _tool_fn(server, "list_models")()
+    out = await _tool_fn(server, "list_models")()
     assert out == [
         {"id": "m1", "name": "Model One", "tool_ids": ["t1", "t2"]},
         {"id": "m2", "name": "Model Two", "tool_ids": []},
@@ -136,6 +146,33 @@ async def test_static_verifier_accepts_and_rejects() -> None:
     assert ok is not None
     assert await verifier.verify_token("wrong-token") is None
     assert await verifier.verify_token("") is None
+
+
+class LoopBoundedFake(FakeClient):
+    """Fake SDK whose run_chat spawns its own loop via asyncio.run, like the
+    real openwebui_sdk does. Fails loudly if called from a running loop."""
+
+    def run_chat(self, **kwargs: Any) -> ChatResult:
+        import asyncio
+
+        async def _inner() -> ChatResult:
+            return ChatResult(answer="loop-ok", tool_calls=[])
+
+        # asyncio.run raises "cannot be called from a running event loop" when
+        # this handler runs on the server's loop instead of a worker thread.
+        return asyncio.run(_inner())
+
+
+@pytest.mark.anyio
+async def test_ask_runs_sdk_in_loop_free_thread() -> None:
+    """Regression: ask must not call asyncio.run from the running event loop."""
+    fake = LoopBoundedFake(tool_ids=["t1"])
+    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
+    out = await _tool_fn(server, "ask")(
+        model="m1", prompt="time?", use_tools=True
+    )
+    assert out["answer"] == "loop-ok"
+    assert fake.resolve_calls == ["m1"]
 
 
 @pytest.mark.anyio

@@ -45,9 +45,20 @@ def _make_cert(tmp: Any) -> tuple[str, str, str]:
     cert = tmp / "cert.pem"
     subprocess.run(
         [
-            "openssl", "req", "-x509", "-newkey", "rsa:2048",
-            "-keyout", str(key), "-out", str(cert), "-days", "2", "-nodes",
-            "-subj", "/CN=localhost",
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "2",
+            "-nodes",
+            "-subj",
+            "/CN=localhost",
         ],
         check=True,
         capture_output=True,
@@ -80,7 +91,9 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_direct_https_to_self_signed_fails_without_fix(
     tls_server: str, isolated_env: None
 ) -> None:
-    with pytest.raises(Exception, match="CERTIFICATE_VERIFY_FAILED|self-signed|unable to get local"):
+    with pytest.raises(
+        Exception, match="CERTIFICATE_VERIFY_FAILED|self-signed|unable to get local"
+    ):
         OpenWebUIClient(base_url=tls_server, token="sk-x").list_models()
 
 
@@ -95,9 +108,7 @@ def test_ca_bundle_allows_self_signed(
     tls_server: str, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, isolated_env: None
 ) -> None:
     _cert, _key, ca = _make_cert(tmp_path)
-    apply_tls_settings(
-        Settings(base_url=tls_server, token="sk-x", ssl_ca_bundle=ca)
-    )
+    apply_tls_settings(Settings(base_url=tls_server, token="sk-x", ssl_ca_bundle=ca))
     assert os.environ.get("SSL_CERT_FILE") == ca
     urllib.request.urlcleanup()
     models = OpenWebUIClient(base_url=tls_server, token="sk-x").list_models()

@@ -128,7 +128,7 @@ the endpoint is `/sse` instead
 ## Development
 
 ```bash
-uv run pytest          # 22 tests
+uv run pytest          # 23 tests
 uv run pyright src tests
 ```
 

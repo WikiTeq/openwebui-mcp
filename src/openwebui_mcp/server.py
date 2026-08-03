@@ -13,14 +13,16 @@ Authentication: the server itself talks to Open WebUI with a bearer token (as
 is configured (``OPENWEBUI_MCP_TOKEN``) the MCP endpoint additionally requires
 ``Authorization: Bearer <token>`` on every request.
 
-Note on threading: the SDK's ``run_chat`` with tools spawns its own event loop
-inside a fresh thread via ``asyncio.run``. Tool handlers here are therefore
-plain sync functions so FastMCP runs them in a worker thread with no event loop
-running - otherwise ``asyncio.run`` would raise "already running".
+Note on threading: FastMCP invokes async tool handlers directly in its event
+loop. The SDK's ``run_chat`` with tools spawns its own event loop via
+``asyncio.run``, which fails from a running loop. The handlers are therefore
+async and offload all blocking SDK work to a worker thread with
+``asyncio.to_thread``, so the SDK can create its own loop there.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import ssl
 from typing import Any
@@ -111,14 +113,7 @@ def create_server(
         ),
     )
 
-    @mcp.tool()
-    def list_models() -> list[dict[str, Any]]:
-        """List the models available on the connected Open WebUI server.
-
-        Returns one entry per model with its id, display name, and the ids of
-        any tools attached to it. Use the returned ids as the ``model``
-        argument of the ``ask`` tool.
-        """
+    def _list_models_sync() -> list[dict[str, Any]]:
         models = owui.list_models()
         return [
             {
@@ -130,7 +125,44 @@ def create_server(
         ]
 
     @mcp.tool()
-    def ask(
+    async def list_models() -> list[dict[str, Any]]:
+        """List the models available on the connected Open WebUI server.
+
+        Returns one entry per model with its id, display name, and the ids of
+        any tools attached to it. Use the returned ids as the ``model``
+        argument of the ``ask`` tool.
+        """
+        return await asyncio.to_thread(_list_models_sync)
+
+    def _ask_sync(
+        model: str,
+        prompt: str,
+        system: str | None,
+        temperature: float | None,
+        use_tools: bool,
+    ) -> dict[str, Any]:
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        tool_ids = owui.resolve_tools(model) if use_tools else []
+
+        result = owui.run_chat(
+            model=model,
+            messages=messages,
+            tool_ids=tool_ids,
+            temperature=temperature,
+            timeout=settings.timeout_ms,
+        )
+        return {
+            "answer": result.answer,
+            "reasoning": result.reasoning,
+            "tool_calls": result.tool_calls,
+        }
+
+    @mcp.tool()
+    async def ask(
         model: str,
         prompt: str,
         system: str | None = None,
@@ -155,24 +187,8 @@ def create_server(
             Dict with the answer text, optional reasoning, and any tool calls
             made: {"answer", "reasoning", "tool_calls"}.
         """
-        messages: list[dict[str, str]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        tool_ids = owui.resolve_tools(model) if use_tools else []
-
-        result = owui.run_chat(
-            model=model,
-            messages=messages,
-            tool_ids=tool_ids,
-            temperature=temperature,
-            timeout=settings.timeout_ms,
+        return await asyncio.to_thread(
+            _ask_sync, model, prompt, system, temperature, use_tools
         )
-        return {
-            "answer": result.answer,
-            "reasoning": result.reasoning,
-            "tool_calls": result.tool_calls,
-        }
 
     return mcp
