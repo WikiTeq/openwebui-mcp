@@ -12,6 +12,9 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
+[options.exclude-newer-package]
+openwebui-sdk = false
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -725,7 +728,7 @@ wheels = [
 
 [[package]]
 name = "openwebui-mcp"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
@@ -742,7 +745,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.20" },
-    { name = "openwebui-sdk", git = "https://github.com/vedmaka/openwebui-sdk" },
+    { name = "openwebui-sdk", specifier = ">=0.1.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
 ]
 
@@ -754,11 +757,15 @@ dev = [
 
 [[package]]
 name = "openwebui-sdk"
-version = "0.1.0"
-source = { git = "https://github.com/vedmaka/openwebui-sdk#f3e425fe782f0c9aa8f821457630e6eb2ed62198" }
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "python-socketio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6b/89/40fb2d1619914c2f086ca726c5b5da521c6ff4374dc8cadb4c86198cb435/openwebui_sdk-0.1.1.tar.gz", hash = "sha256:a31b77295ce07dba3362c0e1fc01b96dbf6757e846904f0fff4abe4d5d2e5ae5", size = 42333, upload-time = "2026-08-03T21:52:37.496Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/92/761d9ef46ea378817c8ed0bf2ce7759095c22258236fd433aa14923e2c64/openwebui_sdk-0.1.1-py3-none-any.whl", hash = "sha256:6efa6810595026fe848d564d3006669a90ec2596c9fa1f0a5e88a115a7aa8051", size = 33156, upload-time = "2026-08-03T21:52:36.333Z" },
 ]
 
 [[package]]
