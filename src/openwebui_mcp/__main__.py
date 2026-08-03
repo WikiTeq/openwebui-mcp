@@ -32,7 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="openwebui",
     )
     parser.add_argument("--host", help="HTTP bind host for sse/streamable-http")
-    parser.add_argument("--port", type=int, help="HTTP bind port for sse/streamable-http")
+    parser.add_argument(
+        "--port", type=int, help="HTTP bind port for sse/streamable-http"
+    )
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),

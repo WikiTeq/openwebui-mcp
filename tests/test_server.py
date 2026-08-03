@@ -31,7 +31,9 @@ class FakeClient:
     ) -> None:
         self.models = models or []
         self.tool_ids = tool_ids or []
-        self.result = result or ChatResult(answer="hi", reasoning="rt", tool_calls=[{"name": "x"}])
+        self.result = result or ChatResult(
+            answer="hi", reasoning="rt", tool_calls=[{"name": "x"}]
+        )
         self.resolve_calls: list[str] = []
         self.chat_calls: list[dict[str, Any]] = []
 
@@ -75,9 +77,7 @@ def test_ask_requires_model_and_prompt_params() -> None:
 def test_ask_calls_client_with_tools_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    out = _tool_fn(server, "ask")(
-        model="m1", prompt="What time is it?", use_tools=True
-    )
+    out = _tool_fn(server, "ask")(model="m1", prompt="What time is it?", use_tools=True)
     assert fake.resolve_calls == ["m1"]
     call = fake.chat_calls[0]
     assert call["model"] == "m1"
@@ -89,9 +89,7 @@ def test_ask_calls_client_with_tools_enabled(monkeypatch: pytest.MonkeyPatch) ->
 def test_ask_system_prompt_prepended() -> None:
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    _tool_fn(server, "ask")(
-        model="m1", prompt="hi", system="Be terse", use_tools=False
-    )
+    _tool_fn(server, "ask")(model="m1", prompt="hi", system="Be terse", use_tools=False)
     call = fake.chat_calls[0]
     assert call["messages"] == [
         {"role": "system", "content": "Be terse"},
@@ -103,14 +101,14 @@ def test_ask_system_prompt_prepended() -> None:
 def test_ask_passes_temperature() -> None:
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    _tool_fn(server, "ask")(
-        model="m1", prompt="hi", temperature=0.5, use_tools=False
-    )
+    _tool_fn(server, "ask")(model="m1", prompt="hi", temperature=0.5, use_tools=False)
     assert fake.chat_calls[0]["temperature"] == 0.5
 
 
 def test_list_models_shape() -> None:
-    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient(models=MS_SAMPLE)))
+    server = create_server(
+        _fake_settings(), client=cast(OpenWebUIClient, FakeClient(models=MS_SAMPLE))
+    )
     out = _tool_fn(server, "list_models")()
     assert out == [
         {"id": "m1", "name": "Model One", "tool_ids": ["t1", "t2"]},

@@ -73,9 +73,7 @@ def create_server(
     ``settings`` (base URL + bearer token). When ``settings.mcp_token`` is set
     the MCP endpoint requires ``Authorization: Bearer <token>`` on requests.
     """
-    owui = client or OpenWebUIClient(
-        base_url=settings.base_url, token=settings.token
-    )
+    owui = client or OpenWebUIClient(base_url=settings.base_url, token=settings.token)
 
     mcp = FastMCP(
         settings.name,
@@ -90,9 +88,7 @@ def create_server(
             else None
         ),
         token_verifier=(
-            StaticTokenVerifier(settings.mcp_token)
-            if settings.mcp_token
-            else None
+            StaticTokenVerifier(settings.mcp_token) if settings.mcp_token else None
         ),
     )
 
