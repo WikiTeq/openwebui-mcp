@@ -49,6 +49,24 @@ class FakeClient:
         return self.result
 
 
+@pytest.fixture
+def sockets_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Replace sockets.run_chat_with_tools with an async recorder."""
+    calls: list[dict[str, Any]] = []
+
+    async def _fake(**kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {
+            "answer": "hi",
+            "reasoning": "rt",
+            "tool_calls": [{"name": "x"}],
+            "raw_content": "",
+        }
+
+    monkeypatch.setattr("openwebui_sdk.sockets.run_chat_with_tools", _fake)
+    return calls
+
+
 def _tool_fn(mcp: FastMCP, name: str) -> Any:
     tool = mcp._tool_manager.get_tool(name)
     assert tool is not None, f"tool {name!r} not registered"
@@ -75,14 +93,19 @@ def test_ask_requires_model_and_prompt_params() -> None:
 
 
 @pytest.mark.anyio
-async def test_ask_calls_client_with_tools_enabled() -> None:
+async def test_ask_with_tools_calls_sockets_runner(sockets_calls: list[dict[str, Any]]) -> None:
+    """Tools path must await sockets.run_chat_with_tools directly, not owui.run_chat."""
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
     out = await _tool_fn(server, "ask")(
         model="m1", prompt="What time is it?", use_tools=True
     )
+    # resolve_tools was called
     assert fake.resolve_calls == ["m1"]
-    call = fake.chat_calls[0]
+    # the sync run_chat (which nests asyncio.run) was NOT called
+    assert fake.chat_calls == []
+    # the async socket runner was called with the right args
+    call = sockets_calls[0]
     assert call["model"] == "m1"
     assert call["tool_ids"] == ["t1"]
     assert call["messages"] == [{"role": "user", "content": "What time is it?"}]
@@ -90,7 +113,8 @@ async def test_ask_calls_client_with_tools_enabled() -> None:
 
 
 @pytest.mark.anyio
-async def test_ask_system_prompt_prepended() -> None:
+async def test_ask_no_tools_uses_http_path() -> None:
+    """No tools -> plain HTTP streaming via owui.run_chat (offloaded to a thread)."""
     fake = FakeClient()
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
     await _tool_fn(server, "ask")(
@@ -128,13 +152,25 @@ async def test_list_models_shape() -> None:
 
 @pytest.mark.anyio
 async def test_ask_timeout_passed_in_seconds() -> None:
-    """SDK run_chat timeouts are seconds, not ms (regression for the hang)."""
+    """SDK timeouts are seconds, not ms (regression for the hang)."""
     fake = FakeClient()
     server = create_server(
         _fake_settings(timeout_ms=120_000), client=cast(OpenWebUIClient, fake)
     )
     await _tool_fn(server, "ask")(model="m1", prompt="hi", use_tools=False)
     assert fake.chat_calls[0]["timeout"] == 120  # seconds, not 120000
+
+
+@pytest.mark.anyio
+async def test_ask_with_tools_timeout_passed_in_seconds(
+    sockets_calls: list[dict[str, Any]],
+) -> None:
+    fake = FakeClient(tool_ids=["t1"])
+    server = create_server(
+        _fake_settings(timeout_ms=120_000), client=cast(OpenWebUIClient, fake)
+    )
+    await _tool_fn(server, "ask")(model="m1", prompt="hi", use_tools=True)
+    assert sockets_calls[0]["timeout"] == 120
 
 
 def test_mcp_auth_wired_when_token_set() -> None:
@@ -159,39 +195,10 @@ async def test_static_verifier_accepts_and_rejects() -> None:
     assert await verifier.verify_token("") is None
 
 
-class LoopBoundedFake(FakeClient):
-    """Fake SDK whose run_chat spawns its own loop via asyncio.run, like the
-    real openwebui_sdk does. Fails loudly if called from a running loop."""
-
-    def run_chat(self, **kwargs: Any) -> ChatResult:
-        import asyncio
-
-        async def _inner() -> ChatResult:
-            return ChatResult(answer="loop-ok", tool_calls=[])
-
-        # asyncio.run raises "cannot be called from a running event loop" when
-        # this handler runs on the server's loop instead of a worker thread.
-        return asyncio.run(_inner())
-
-
 @pytest.mark.anyio
-async def test_ask_runs_sdk_in_loop_free_thread() -> None:
-    """Regression: ask must not call asyncio.run from the running event loop."""
-    fake = LoopBoundedFake(tool_ids=["t1"])
-    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    out = await _tool_fn(server, "ask")(model="m1", prompt="time?", use_tools=True)
-    assert out["answer"] == "loop-ok"
-    assert fake.resolve_calls == ["m1"]
-
-
-@pytest.mark.anyio
-async def test_call_tool_end_to_end() -> None:
+async def test_call_tool_end_to_end(sockets_calls: list[dict[str, Any]]) -> None:
     """Drive both tools through FastMCP's call_tool pipeline (protocol level)."""
-    fake = FakeClient(
-        models=MS_SAMPLE,
-        tool_ids=["t1"],
-        result=ChatResult(answer="42", tool_calls=[]),
-    )
+    fake = FakeClient(models=MS_SAMPLE, tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
 
     content, structured = cast(Any, await server.call_tool("list_models", {}))
@@ -207,5 +214,6 @@ async def test_call_tool_end_to_end() -> None:
         ),
     )
     assert fake.resolve_calls == ["m1"]
-    assert fake.chat_calls[0]["tool_ids"] == ["t1"]
-    assert structured_out["answer"] == "42"
+    assert sockets_calls[0]["tool_ids"] == ["t1"]
+    # sockets fake returns answer "hi"
+    assert structured_out["answer"] == "hi"

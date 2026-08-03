@@ -13,11 +13,15 @@ Authentication: the server itself talks to Open WebUI with a bearer token (as
 is configured (``OPENWEBUI_MCP_TOKEN``) the MCP endpoint additionally requires
 ``Authorization: Bearer <token>`` on every request.
 
-Note on threading: FastMCP invokes async tool handlers directly in its event
-loop. The SDK's ``run_chat`` with tools spawns its own event loop via
-``asyncio.run``, which fails from a running loop. The handlers are therefore
-async and offload all blocking SDK work to a worker thread with
-``asyncio.to_thread``, so the SDK can create its own loop there.
+Note on the event loop: the SDK ships a sync ``run_chat`` that wraps its async
+Socket.IO runner in ``asyncio.run``. That works for the CLI (main thread, no
+loop running) but NOT inside an async server: ``asyncio.run`` from a running
+loop raises, and nesting it in ``asyncio.to_thread`` starves the socket
+background tasks so completion events never arrive (the tool hangs). So the
+``ask`` handler awaits the SDK's async ``sockets.run_chat_with_tools`` directly
+on this event loop - one loop owns the aiohttp session, the socketio client and
+the completion event, exactly like the CLI's single loop. Blocking SDK work
+without tools (plain HTTP) is still offloaded via ``asyncio.to_thread``.
 """
 
 from __future__ import annotations
@@ -137,46 +141,19 @@ def create_server(
         """
         return await asyncio.to_thread(_list_models_sync)
 
-    def _ask_sync(
+    def _ask_no_tools_sync(
         model: str,
-        prompt: str,
-        system: str | None,
+        messages: list[dict[str, str]],
         temperature: float | None,
-        use_tools: bool,
         timeout_s: int,
     ) -> dict[str, Any]:
-        import time
-
-        started = time.monotonic()
-        messages: list[dict[str, str]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        tool_ids = owui.resolve_tools(model) if use_tools else []
-        logger.info(
-            "ask: model=%s tools=%s timeout=%ss",
-            model,
-            tool_ids or "(none)",
-            timeout_s,
-        )
-
+        """Plain HTTP streaming path (no Socket.IO). Blocking; run in a thread."""
         result = owui.run_chat(
             model=model,
             messages=messages,
-            tool_ids=tool_ids,
+            tool_ids=[],
             temperature=temperature,
             timeout=timeout_s,
-            on_status=lambda s: logger.info("ask[%s]: status: %s", model, s),
-            on_tool=lambda s: logger.info("ask[%s]: tool: %s", model, s),
-            on_reasoning=lambda s: logger.debug(
-                "ask[%s]: reasoning: %s", model, (s or "")[:200]
-            ),
-        )
-        logger.info(
-            "ask: done in %.1fs (tools=%d)",
-            time.monotonic() - started,
-            len(result.tool_calls or []),
         )
         return {
             "answer": result.answer,
@@ -210,21 +187,77 @@ def create_server(
             Dict with the answer text, optional reasoning, and any tool calls
             made: {"answer", "reasoning", "tool_calls"}.
         """
-        # SDK timeouts are in SECONDS (http.DEFAULT_TIMEOUT=60), settings in ms.
+        import time
+
+        from openwebui_sdk import sockets
+
+        # SDK timeouts are in SECONDS (http.DEFAULT_TIMEOUT=60); settings in ms.
         timeout_s = max(1, settings.timeout_ms // 1000)
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        tool_ids = (
+            await asyncio.to_thread(owui.resolve_tools, model) if use_tools else []
+        )
+        logger.info(
+            "ask: model=%s tools=%s timeout=%ss", model, tool_ids or "(none)", timeout_s
+        )
+
+        started = time.monotonic()
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    _ask_sync, model, prompt, system, temperature, use_tools, timeout_s
-                ),
-                # Bound the whole tool call: socket connect + chat + completion
-                # must finish inside the budget plus a small margin.
-                timeout=timeout_s + 60,
+            if tool_ids:
+                # Await the SDK's async Socket.IO runner DIRECTLY on this event
+                # loop - exactly how the CLI awaits it on its loop. Nesting the
+                # SDK's asyncio.run inside asyncio.to_thread broke event
+                # delivery (socket background tasks never pumped); running on
+                # this loop keeps the aiohttp session + socketio client + the
+                # completion event on one loop, so chat-events flow back.
+                data = await asyncio.wait_for(
+                    sockets.run_chat_with_tools(
+                        base_url=settings.base_url,
+                        token=settings.token,
+                        model=model,
+                        messages=messages,
+                        tool_ids=tool_ids,
+                        timeout=timeout_s,
+                        on_status=lambda s: logger.info(
+                            "ask[%s]: status: %s", model, s
+                        ),
+                        on_tool=lambda s: logger.info("ask[%s]: tool: %s", model, s),
+                        on_reasoning=lambda s: logger.debug(
+                            "ask[%s]: reasoning: %s", model, (s or "")[:200]
+                        ),
+                    ),
+                    timeout=timeout_s + 60,
+                )
+                result = {
+                    "answer": data.get("answer", ""),
+                    "reasoning": data.get("reasoning"),
+                    "tool_calls": data.get("tool_calls", []),
+                }
+            else:
+                # No tools: plain HTTP streaming path (blocking) - offload.
+                result = await asyncio.to_thread(
+                    _ask_no_tools_sync,
+                    model,
+                    messages,
+                    temperature,
+                    timeout_s,
+                )
+        except TimeoutError:
+            logger.error(
+                "ask: timed out after %ss for model=%s", timeout_s + 60, model
             )
-        except TimeoutError as exc:
-            logger.error("ask: timed out after %ss for model=%s", timeout_s + 60, model)
             raise RuntimeError(
                 f"Open WebUI did not complete within {timeout_s + 60}s"
-            ) from exc
+            ) from None
+        logger.info(
+            "ask: done in %.1fs (tools=%d)",
+            time.monotonic() - started,
+            len(result.get("tool_calls") or []),
+        )
+        return result
 
     return mcp
