@@ -6,6 +6,9 @@ and the [openwebui-sdk](https://github.com/vedmaka/openwebui-sdk) library
 Lets any MCP client (Claude Desktop, Cursor, agents) ask Open WebUI models
 through the full tool-calling loop, not just plain chat
 
+<img width="3680" height="2592" alt="ray-so-export (1)" src="https://github.com/user-attachments/assets/01e7ed7f-35a5-413e-9b26-27ac823d7c74" />
+
+
 ## Quick start
 
 ```bash
