@@ -126,6 +126,17 @@ async def test_list_models_shape() -> None:
     ]
 
 
+@pytest.mark.anyio
+async def test_ask_timeout_passed_in_seconds() -> None:
+    """SDK run_chat timeouts are seconds, not ms (regression for the hang)."""
+    fake = FakeClient()
+    server = create_server(
+        _fake_settings(timeout_ms=120_000), client=cast(OpenWebUIClient, fake)
+    )
+    await _tool_fn(server, "ask")(model="m1", prompt="hi", use_tools=False)
+    assert fake.chat_calls[0]["timeout"] == 120  # seconds, not 120000
+
+
 def test_mcp_auth_wired_when_token_set() -> None:
     server = create_server(
         _fake_settings(mcp_token="s3cret"), client=cast(OpenWebUIClient, FakeClient())
@@ -168,9 +179,7 @@ async def test_ask_runs_sdk_in_loop_free_thread() -> None:
     """Regression: ask must not call asyncio.run from the running event loop."""
     fake = LoopBoundedFake(tool_ids=["t1"])
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
-    out = await _tool_fn(server, "ask")(
-        model="m1", prompt="time?", use_tools=True
-    )
+    out = await _tool_fn(server, "ask")(model="m1", prompt="time?", use_tools=True)
     assert out["answer"] == "loop-ok"
     assert fake.resolve_calls == ["m1"]
 

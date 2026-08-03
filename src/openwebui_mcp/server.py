@@ -23,6 +23,7 @@ async and offload all blocking SDK work to a worker thread with
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import ssl
 from typing import Any
@@ -34,6 +35,8 @@ from openwebui_sdk import OpenWebUIClient
 from pydantic import AnyHttpUrl
 
 from openwebui_mcp.config import Settings
+
+logger = logging.getLogger(__name__)
 
 # SDK models attach tools under info.meta.toolIds; we surface that in
 # list_models so callers can see which tools a model can invoke.
@@ -140,20 +143,40 @@ def create_server(
         system: str | None,
         temperature: float | None,
         use_tools: bool,
+        timeout_s: int,
     ) -> dict[str, Any]:
+        import time
+
+        started = time.monotonic()
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
         tool_ids = owui.resolve_tools(model) if use_tools else []
+        logger.info(
+            "ask: model=%s tools=%s timeout=%ss",
+            model,
+            tool_ids or "(none)",
+            timeout_s,
+        )
 
         result = owui.run_chat(
             model=model,
             messages=messages,
             tool_ids=tool_ids,
             temperature=temperature,
-            timeout=settings.timeout_ms,
+            timeout=timeout_s,
+            on_status=lambda s: logger.info("ask[%s]: status: %s", model, s),
+            on_tool=lambda s: logger.info("ask[%s]: tool: %s", model, s),
+            on_reasoning=lambda s: logger.debug(
+                "ask[%s]: reasoning: %s", model, (s or "")[:200]
+            ),
+        )
+        logger.info(
+            "ask: done in %.1fs (tools=%d)",
+            time.monotonic() - started,
+            len(result.tool_calls or []),
         )
         return {
             "answer": result.answer,
@@ -187,8 +210,21 @@ def create_server(
             Dict with the answer text, optional reasoning, and any tool calls
             made: {"answer", "reasoning", "tool_calls"}.
         """
-        return await asyncio.to_thread(
-            _ask_sync, model, prompt, system, temperature, use_tools
-        )
+        # SDK timeouts are in SECONDS (http.DEFAULT_TIMEOUT=60), settings in ms.
+        timeout_s = max(1, settings.timeout_ms // 1000)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _ask_sync, model, prompt, system, temperature, use_tools, timeout_s
+                ),
+                # Bound the whole tool call: socket connect + chat + completion
+                # must finish inside the budget plus a small margin.
+                timeout=timeout_s + 60,
+            )
+        except TimeoutError as exc:
+            logger.error("ask: timed out after %ss for model=%s", timeout_s + 60, model)
+            raise RuntimeError(
+                f"Open WebUI did not complete within {timeout_s + 60}s"
+            ) from exc
 
     return mcp
