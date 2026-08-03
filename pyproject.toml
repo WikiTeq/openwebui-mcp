@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openwebui-mcp"
+version = "0.1.0"
+description = "Open WebUI MCP server (FastMCP) - ask models with tool support, list models"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Alexey @vedmaka" }]
+dependencies = [
+    "mcp>=1.20",
+    "openwebui-sdk @ git+https://github.com/vedmaka/openwebui-sdk",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+openwebui-mcp = "openwebui_mcp.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+openwebui_mcp = ["py.typed"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pyright>=1.1.400",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
