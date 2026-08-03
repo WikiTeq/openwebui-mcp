@@ -260,7 +260,7 @@ uv run openwebui-mcp --transport streamable-http --host 0.0.0.0 --port 8000
 ## Development
 
 ```bash
-uv run pytest          # 39 tests
+uv run pytest
 uv run pyright src tests
 ```
 
