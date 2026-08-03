@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # Accepted env var names, in precedence order, for each setting.
 _BASE_URL_VARS = ("OPENWEBUI_BASE_URL", "OPENWEBUI_URL", "OWUI_URL")
 _TOKEN_VARS = ("OPENWEBUI_API_KEY", "OPENWEBUI_TOKEN", "OWUI_API_KEY", "OWUI_TOKEN")
+_DEFAULT_MODEL_VARS = ("OPENWEBUI_DEFAULT_MODEL", "OWUI_DEFAULT_MODEL")
+_ENFORCE_DEFAULT_MODEL_VARS = (
+    "OPENWEBUI_ENFORCE_DEFAULT_MODEL",
+    "OWUI_ENFORCE_DEFAULT_MODEL",
+)
 _MCP_TOKEN_VARS = ("OPENWEBUI_MCP_TOKEN", "OWUI_MCP_TOKEN")
 _TRANSPORT_VARS = ("OPENWEBUI_MCP_TRANSPORT", "OWUI_MCP_TRANSPORT")
 _SSL_CA_VARS = ("OPENWEBUI_CA_BUNDLE", "OWUI_CA_BUNDLE")
@@ -66,6 +71,11 @@ class Settings:
     base_url: str
     token: str
     name: str = "openwebui"
+    # Model used by ``ask`` when the caller does not pass one explicitly.
+    default_model: str | None = None
+    # When true, ``ask`` always uses ``default_model`` and ignores the caller's
+    # ``model`` argument (must be paired with ``default_model``).
+    enforce_default_model: bool = False
     mcp_token: str | None = None
     timeout_ms: int = 120_000
     transport: Transport = "stdio"
@@ -89,6 +99,7 @@ class Settings:
                 "OPENWEBUI_TOKEN)"
             )
         mcp_token = overrides.get("mcp_token") or _first(*_MCP_TOKEN_VARS)
+        default_model = overrides.get("default_model") or _first(*_DEFAULT_MODEL_VARS)
         transport = overrides.get("transport") or _first(*_TRANSPORT_VARS) or "stdio"
         if transport not in _VALID_TRANSPORTS:
             raise ValueError(
@@ -100,8 +111,7 @@ class Settings:
         transport = cast(Transport, transport)
         try:
             timeout_ms = int(
-                overrides.get("timeout_ms")
-                or os.getenv("OWUI_TIMEOUT_MS", "120000")
+                overrides.get("timeout_ms") or os.getenv("OWUI_TIMEOUT_MS", "120000")
             )
         except ValueError as exc:
             raise ValueError(f"invalid OWUI_TIMEOUT_MS: {exc}") from exc
@@ -114,11 +124,19 @@ class Settings:
             or _first(*_SSL_VERIFY_VARS, default="true")
             or "true"
         )
+        enforce_raw = (
+            overrides.get("enforce_default_model")
+            or _first(*_ENFORCE_DEFAULT_MODEL_VARS, default="false")
+            or "false"
+        )
         return cls(
             base_url=base_url,
             token=token,
             name=overrides.get("name", "openwebui"),
             mcp_token=mcp_token,
+            default_model=default_model,
+            enforce_default_model=enforce_raw.strip().lower()
+            not in ("0", "false", "no", "off"),
             transport=transport,
             timeout_ms=timeout_ms,
             host=overrides.get("host", "127.0.0.1"),

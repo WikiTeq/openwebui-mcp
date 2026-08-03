@@ -14,11 +14,25 @@ Exactly two tools are exposed
 
 Send a prompt to a model with Open WebUI tool support
 
-- `model` (required) - the model id to ask, e.g. one returned by `list_models`
 - `prompt` (required) - the user message
+- `model` (optional) - the model id to ask, e.g. one returned by `list_models`.
+  Omitted, the server uses the configured `OPENWEBUI_DEFAULT_MODEL`; if that
+  is also unset the call fails with an error
 - `system` (optional) - a system prompt leading the conversation
 - `temperature` (optional) - sampling temperature override
 - `use_tools` (optional, default true) - enable the tools attached to the model
+- `history` (optional) - prior turns `[{"role": "user"|"assistant", "content": "..."}]`
+  sent before `prompt` so the remote model keeps context from earlier questions
+
+**Stateless**: each `ask` call is a fresh conversation on the remote model - it
+never remembers previous calls. To carry context across questions, pass the
+relevant earlier exchanges in `history` (e.g. your prior question and its
+answer), or inline the context into `prompt`. Agents that keep their own
+conversation log should replay the needed turns via `history`
+
+To lock every call to one model regardless of what the client passes, set
+`OPENWEBUI_ENFORCE_DEFAULT_MODEL=true` (requires `OPENWEBUI_DEFAULT_MODEL`);
+`ask` then ignores the `model` argument entirely
 
 Tools attached to the model run server-side through Open WebUI's Socket.IO
 tool loop, so answers can be produced with real tool calls. Result is a struct
@@ -83,6 +97,8 @@ defined env var in each alias list
 | --- | --- | --- |
 | Open WebUI URL | `OPENWEBUI_BASE_URL`, `OPENWEBUI_URL`, `OWUI_URL` | required |
 | Open WebUI token | `OPENWEBUI_API_KEY`, `OPENWEBUI_TOKEN`, `OWUI_API_KEY`, `OWUI_TOKEN` | required |
+| Default model for `ask` | `OPENWEBUI_DEFAULT_MODEL`, `OWUI_DEFAULT_MODEL` | none |
+| Enforce default model | `OPENWEBUI_ENFORCE_DEFAULT_MODEL`, `OWUI_ENFORCE_DEFAULT_MODEL` | `false` |
 | MCP bearer token | `OPENWEBUI_MCP_TOKEN`, `OWUI_MCP_TOKEN` | none |
 | Transport | `OPENWEBUI_MCP_TRANSPORT` | `stdio` |
 | Chat timeout ms | `OWUI_TIMEOUT_MS` | `120000` |

@@ -163,25 +163,41 @@ def create_server(
 
     @mcp.tool()
     async def ask(
-        model: str,
         prompt: str,
+        model: str | None = None,
         system: str | None = None,
         temperature: float | None = None,
         use_tools: bool = True,
+        history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Ask an Open WebUI model a question, with tool support.
 
-        The model is required, e.g. one of the ids returned by ``list_models``.
-        Tools attached to the model are enabled by default (``use_tools``) and
-        run server-side through Open WebUI's Socket.IO tool loop, so answers may
+        IMPORTANT - this MCP server is stateless: every call starts a FRESH
+        conversation on the remote model. The remote model does NOT remember
+        previous calls. To carry context between questions, pass the relevant
+        prior exchanges in ``history`` as ``[{"role": "user"|"assistant",
+        "content": ...}]`` (your earlier question and its answer, in order),
+        or include the needed context directly in ``prompt``.
+
+        When ``model`` is omitted the configured default
+        (``OPENWEBUI_DEFAULT_MODEL``) is used; if that is also unset the call
+        fails. When ``OPENWEBUI_ENFORCE_DEFAULT_MODEL`` is on the configured
+        default is always used and the caller's ``model`` is ignored. Tools
+        attached to the model are enabled by default (``use_tools``) and run
+        server-side through Open WebUI's Socket.IO tool loop, so answers may
         be produced with real tool calls.
 
         Args:
-            model: Open WebUI model id to ask, e.g. "sample-workspace-model-1".
             prompt: The user message to send to the model.
+            model: Open WebUI model id to ask, e.g. "sample-workspace-model-1",
+                or from ``list_models``. Defaults to OPENWEBUI_DEFAULT_MODEL.
             system: Optional system prompt leading the conversation.
             temperature: Optional sampling temperature override.
             use_tools: Enable tools attached to the model (default True).
+            history: Optional prior turns ``[{"role": "user"|"assistant",
+                "content": ...}]`` sent before ``prompt`` (and after any
+                ``system`` prompt) so the remote model keeps context from
+                earlier questions.
 
         Returns:
             Dict with the answer text, optional reasoning, and any tool calls
@@ -191,11 +207,23 @@ def create_server(
 
         from openwebui_sdk import sockets
 
+        if settings.enforce_default_model:
+            # Enforce mode: the server-side default always wins over caller input.
+            model = settings.default_model
+        else:
+            model = model or settings.default_model
+        if not model:
+            raise ValueError(
+                "no model specified: pass a model to ask or set OPENWEBUI_DEFAULT_MODEL"
+            )
+
         # SDK timeouts are in SECONDS (http.DEFAULT_TIMEOUT=60); settings in ms.
         timeout_s = max(1, settings.timeout_ms // 1000)
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
+        if history:
+            messages.extend(history)
         messages.append({"role": "user", "content": prompt})
 
         tool_ids = (
@@ -247,9 +275,7 @@ def create_server(
                     timeout_s,
                 )
         except TimeoutError:
-            logger.error(
-                "ask: timed out after %ss for model=%s", timeout_s + 60, model
-            )
+            logger.error("ask: timed out after %ss for model=%s", timeout_s + 60, model)
             raise RuntimeError(
                 f"Open WebUI did not complete within {timeout_s + 60}s"
             ) from None
