@@ -1,0 +1,146 @@
+---
+name: CI
+
+# Lint + test on every push and PR. When those pass, publish the PyPI
+# packages (gated by `needs`):
+#   - on a v* tag push (a release)
+#   - on a push to master (rolling "latest"; skip-existing no-ops when the
+#     version is already up on PyPI unless it was bumped on master)
+#   - on workflow_dispatch (manual release from the current branch)
+#
+# Publishing uses PyPI Trusted Publishing (GitHub OIDC), no API tokens stored.
+# Register this repository (workflow "CI") as a trusted publisher for both
+# projects on PyPI, then tagging / merging is all it takes:
+#   https://pypi.org/manage/account/publishing/
+#
+# Actions are pinned to node24 versions (Node 20 reached EOL April 2026 and
+# runners default to Node 24 since June 16 2026):
+#   actions/checkout v7.0.1, actions/setup-python v7.0.0.
+# gh-action-pypi-publish is composite, so it is unaffected.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.1 (node24)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-python v7.0.0 (node24)
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Install lint tools
+        run: pip install "ruff==0.16.1" pyright
+      - name: Ruff
+        run: ruff check src tests
+      - name: Pyright
+        run: pyright src
+
+  test:
+    name: Tests (py ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      # actions/checkout v7.0.1 (node24)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-python v7.0.0 (node24)
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          pip install -e .
+      - name: Tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+  publish:
+    name: Publish openwebui-mcp (PyPI)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.ref == 'refs/heads/master' ||
+       startsWith(github.ref, 'refs/tags/v'))
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing: mint a short-lived PyPI token
+    steps:
+      # actions/checkout v7.0.1 (node24)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # actions/setup-python v7.0.0 (node24)
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install uv
+      - name: Build sdist and wheel
+        run: uv build --out-dir dist .
+      # pypa/gh-action-pypi-publish release/v1 (v1.14.2)
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # yamllint disable-line rule:line-length
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+  docker:
+    name: Build & push CLI image (GHCR)
+    # Same release path as publishing: master, v* tag, or manual dispatch,
+    # gated on lint + test having passed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.ref == 'refs/heads/master' ||
+       startsWith(github.ref, 'refs/tags/v'))
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+    steps:
+      # actions/checkout v7.0.1 (node24)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # docker/setup-qemu-action v4.2.0 - multiarch build
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8
+      # docker/setup-buildx-action v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # yamllint disable-line rule:line-length
+      # docker/login-action v4.6.0 - GHCR
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # docker/metadata-action v6.2.0 - derive tags + labels
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: ghcr.io/vedmaka/openwebui-mcp
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+      # docker/build-push-action v7.3.0
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
