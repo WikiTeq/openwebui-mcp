@@ -78,6 +78,18 @@ def _fake_settings(**kw: Any) -> Settings:
     return Settings(**base)
 
 
+def test_server_instructions_field() -> None:
+    """Server-wide instructions surface for Codex-style hosts to read."""
+    server = create_server(
+        _fake_settings(instructions="Always use ask() for genealogy questions"),
+        client=cast(OpenWebUIClient, FakeClient()),
+    )
+    assert server.instructions == "Always use ask() for genealogy questions"
+    # unset -> None
+    plain = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
+    assert plain.instructions is None
+
+
 def test_server_exposes_both_tools() -> None:
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
     names = {t.name for t in server._tool_manager.list_tools()}
@@ -98,6 +110,35 @@ def test_ask_params_optionality() -> None:
         s.get("type") for s in history_schema.get("anyOf", [])
     ]
     assert "array" in schema_types
+
+
+def test_ask_description_env_override() -> None:
+    """ENV replaces only the first summary line; the rest always stays."""
+    server = create_server(
+        _fake_settings(ask_description="Always answer in German"),
+        client=cast(OpenWebUIClient, FakeClient()),
+    )
+    tool = server._tool_manager.get_tool("ask")
+    assert tool is not None
+    # env text is the new first line
+    assert tool.description.startswith("Always answer in German")
+    # the default summary line is replaced (not just prepended)
+    assert "a question, with tool support" not in tool.description.splitlines()[0]
+    # the stateless/history guidance survives
+    assert "IMPORTANT - this MCP server is stateless" in tool.description
+    assert "history" in tool.description
+
+
+def test_ask_description_falls_back_to_docstring() -> None:
+    """No ENV description -> the built-in docstring is used verbatim."""
+    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
+    tool = server._tool_manager.get_tool("ask")
+    assert tool is not None
+    assert tool.description.startswith(
+        "Ask an Open WebUI model a question, with tool support."
+    )
+    assert "IMPORTANT - this MCP server is stateless" in tool.description
+    assert "history" in tool.description
 
 
 @pytest.mark.anyio

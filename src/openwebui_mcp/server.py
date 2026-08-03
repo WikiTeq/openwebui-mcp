@@ -27,6 +27,7 @@ without tools (plain HTTP) is still offloaded via ``asyncio.to_thread``.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import ssl
@@ -75,6 +76,19 @@ def _mcp_endpoint_url(settings: Settings) -> AnyHttpUrl:
     return AnyHttpUrl(f"http://{settings.host}:{settings.port}/mcp")
 
 
+def ask_description(fn: Any, settings: Settings) -> str:
+    """Description shown for the ``ask`` tool to MCP agents.
+
+    The full docstring is always kept; ``settings.ask_description`` (from
+    ``OPENWEBUI_ASK_DESCRIPTION``) only replaces the first summary line so
+    operators can reword it without losing the stateless/history guidance.
+    """
+    doc = inspect.getdoc(fn) or ""
+    summary, sep, rest = doc.partition("\n")
+    summary = settings.ask_description or summary
+    return f"{summary}{sep}{rest}".strip()
+
+
 def apply_tls_settings(settings: Settings) -> None:
     """Apply TLS trust config to this process before any SDK request.
 
@@ -105,6 +119,7 @@ def create_server(
 
     mcp = FastMCP(
         settings.name,
+        instructions=settings.instructions,
         host=settings.host,
         port=settings.port,
         auth=(
@@ -161,7 +176,6 @@ def create_server(
             "tool_calls": result.tool_calls,
         }
 
-    @mcp.tool()
     async def ask(
         prompt: str,
         model: str | None = None,
@@ -201,7 +215,8 @@ def create_server(
 
         Returns:
             Dict with the answer text, optional reasoning, and any tool calls
-            made: {"answer", "reasoning", "tool_calls"}.
+            made: {"answer", "reasoning", "tool_calls"}. The "answer" may contain
+            links, treat these as information sources, and cite as needed.
         """
         import time
 
@@ -285,5 +300,9 @@ def create_server(
             len(result.get("tool_calls") or []),
         )
         return result
+
+    # Register ``ask`` with a composed description: the full docstring is
+    # always shown, with only the first summary line replaceable via env.
+    mcp.tool(description=ask_description(ask, settings), name="ask")(ask)
 
     return mcp

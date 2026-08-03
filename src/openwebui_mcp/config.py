@@ -27,6 +27,8 @@ _MCP_TOKEN_VARS = ("OPENWEBUI_MCP_TOKEN", "OWUI_MCP_TOKEN")
 _TRANSPORT_VARS = ("OPENWEBUI_MCP_TRANSPORT", "OWUI_MCP_TRANSPORT")
 _SSL_CA_VARS = ("OPENWEBUI_CA_BUNDLE", "OWUI_CA_BUNDLE")
 _SSL_VERIFY_VARS = ("OPENWEBUI_SSL_VERIFY", "OWUI_SSL_VERIFY")
+_ASK_DESCRIPTION_VARS = ("OPENWEBUI_ASK_DESCRIPTION", "OWUI_ASK_DESCRIPTION")
+_INSTRUCTIONS_VARS = ("OPENWEBUI_INSTRUCTIONS", "OWUI_INSTRUCTIONS")
 
 # MCP transports FastMCP can run on; validated at config time.
 Transport = Literal["stdio", "sse", "streamable-http"]
@@ -86,6 +88,13 @@ class Settings:
     # ``ssl_verify`` disables certificate verification for the JSON routes.
     ssl_ca_bundle: str | None = None
     ssl_verify: bool = True
+    # Custom description for the ``ask`` tool; when set it replaces the built-in
+    # docstring description. Lets operators inject agent-facing instructions.
+    ask_description: str | None = None
+    # Server-wide ``instructions`` surfaced in the MCP initialize response.
+    # Codex and other hosts read it as usage guidance for the whole server, so
+    # this is where to tell agents to use the tools proactively.
+    instructions: str | None = None
 
     @classmethod
     def from_env(cls, **overrides: str) -> Settings:
@@ -143,4 +152,7 @@ class Settings:
             port=port,
             ssl_ca_bundle=overrides.get("ssl_ca_bundle") or _first(*_SSL_CA_VARS),
             ssl_verify=verify_raw.strip().lower() not in ("0", "false", "no", "off"),
+            ask_description=overrides.get("ask_description")
+            or _first(*_ASK_DESCRIPTION_VARS),
+            instructions=overrides.get("instructions") or _first(*_INSTRUCTIONS_VARS),
         )

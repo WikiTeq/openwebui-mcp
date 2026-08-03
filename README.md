@@ -6,6 +6,132 @@ and the [openwebui-sdk](https://github.com/vedmaka/openwebui-sdk) library
 Lets any MCP client (Claude Desktop, Cursor, agents) ask Open WebUI models
 through the full tool-calling loop, not just plain chat
 
+## Quick start
+
+```bash
+cp .env.example .env    # set OPENWEBUI_BASE_URL and OPENWEBUI_API_KEY
+uvx openwebui-mcp       # stdio (default) - installs and runs from PyPI
+```
+
+### Connect an MCP client
+
+**Codex CLI** (`~/.codex/config.toml`) - register the server as `owui` and let
+it call tools without approval:
+
+```toml
+[mcp_servers.owui]
+command = "uvx"
+args = ["openwebui-mcp"]
+env = {
+  OPENWEBUI_BASE_URL = "http://localhost:8080",
+  OPENWEBUI_API_KEY = "sk-..."
+}
+default_tools_approval_mode = "auto"
+```
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "openwebui": {
+      "command": "uvx",
+      "args": ["openwebui-mcp"],
+      "env": {
+        "OPENWEBUI_BASE_URL": "http://localhost:8080",
+        "OPENWEBUI_API_KEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+The quick start uses stdio, so each client spawns the server locally. For
+remote HTTP transports, open the collapsible options below (or see Run)
+
+<details>
+<summary>SSE setup (Claude Desktop and other SSE-capable clients)</summary>
+
+Run the server:
+
+```bash
+uvx openwebui-mcp --transport sse --host 0.0.0.0 --port 8000
+```
+
+**Claude Desktop** (`claude_desktop_config.json`) - SSE endpoint is `http://<host>:8000/sse`:
+
+```json
+{
+  "mcpServers": {
+    "openwebui": {
+      "type": "sse",
+      "url": "http://<host>:8000/sse"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Streamable HTTP setup (Codex CLI, rmcp, agents over HTTP)</summary>
+
+Run the server:
+
+```bash
+uvx openwebui-mcp --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+**Codex CLI** (`~/.codex/config.toml`) - streamable-http endpoint is `http://<host>:8000/mcp`:
+
+```toml
+[mcp_servers.owui]
+url = "http://<host>:8000/mcp"
+default_tools_approval_mode = "auto"
+```
+
+A bare `http://<host>:8000` returns 404 on initialize; point the client URL at
+the full `/mcp` path. rmcp and other streamable-http clients use the same URL
+
+</details>
+
+## Proactive ask skill
+
+The repo ships a skill that makes an agent consult the `ask` tool eagerly
+instead of only when it happens to choose to:
+
+```text
+skills/owui-proactive-ask/SKILL.md
+```
+
+It instructs the agent to call `mcp__owui__ask` before answering **every**
+explicit or implicit question (advice, explanations, recommendations,
+troubleshooting, follow-ups), pass relevant conversation context via
+`history`, keep remote tools enabled (`use_tools: true`), and validate the OWUI
+answer against local evidence before replying. It also covers failure handling
+(retry, fall back, say it failed - never fake an OWUI result).
+
+Install it with the agent skills CLI (`npx skills`) or manually:
+
+```bash
+# global install for Codex
+npx skills add ./skills/owui-proactive-ask -g -a codex -y
+
+# global install for Claude Code
+npx skills add ./skills/owui-proactive-ask -g -a claude-code -y
+
+# or copy the folder into your agent's skills directory
+cp -r skills/owui-proactive-ask ~/.agents/skills/
+```
+
+The skill references the tool as `mcp__owui__ask`, so register the MCP server
+under the name `owui` (Codex-style clients name MCP tools
+`mcp__<server>__<tool>`, see `[mcp_servers.owui]` in Quick start above).
+
+The skill pairs with `OPENWEBUI_ASK_DESCRIPTION` and `OPENWEBUI_INSTRUCTIONS`
+(see Configure): the skill makes the agent call `ask`, while the description
+and instructions tell the model why and when.
+
 ## Tools
 
 Exactly two tools are exposed
@@ -33,6 +159,12 @@ conversation log should replay the needed turns via `history`
 To lock every call to one model regardless of what the client passes, set
 `OPENWEBUI_ENFORCE_DEFAULT_MODEL=true` (requires `OPENWEBUI_DEFAULT_MODEL`);
 `ask` then ignores the `model` argument entirely
+
+To control what agents see about this tool, set `OPENWEBUI_ASK_DESCRIPTION` -
+it replaces only the first summary line of the tool description (the text
+agents read to decide how to call `ask`). The `IMPORTANT - this MCP server is
+stateless` block, the argument docs and the default-model guidance are always
+present. Unset, the built-in summary line is used
 
 Tools attached to the model run server-side through Open WebUI's Socket.IO
 tool loop, so answers can be produced with real tool calls. Result is a struct
@@ -99,6 +231,8 @@ defined env var in each alias list
 | Open WebUI token | `OPENWEBUI_API_KEY`, `OPENWEBUI_TOKEN`, `OWUI_API_KEY`, `OWUI_TOKEN` | required |
 | Default model for `ask` | `OPENWEBUI_DEFAULT_MODEL`, `OWUI_DEFAULT_MODEL` | none |
 | Enforce default model | `OPENWEBUI_ENFORCE_DEFAULT_MODEL`, `OWUI_ENFORCE_DEFAULT_MODEL` | `false` |
+| `ask` tool description | `OPENWEBUI_ASK_DESCRIPTION`, `OWUI_ASK_DESCRIPTION` | built-in docstring |
+| Server instructions | `OPENWEBUI_INSTRUCTIONS`, `OWUI_INSTRUCTIONS` | none |
 | MCP bearer token | `OPENWEBUI_MCP_TOKEN`, `OWUI_MCP_TOKEN` | none |
 | Transport | `OPENWEBUI_MCP_TRANSPORT` | `stdio` |
 | Chat timeout ms | `OWUI_TIMEOUT_MS` | `120000` |
@@ -113,47 +247,17 @@ uv run openwebui-mcp --transport sse      # SSE over HTTP
 uv run openwebui-mcp --transport streamable-http --host 0.0.0.0 --port 8000
 ```
 
-### Client config example (Claude Desktop)
-
-```json
-{
-  "mcpServers": {
-    "openwebui": {
-      "command": "/path/to/openwebui-mcp/.venv-docker/bin/openwebui-mcp",
-      "env": {
-        "OPENWEBUI_BASE_URL": "http://localhost:8080",
-        "OPENWEBUI_API_KEY": "sk-..."
-      }
-    }
-  }
-}
-```
-
-### Remote HTTP clients (codex, rmcp, ...)
-
-For `--transport streamable-http` the MCP endpoint lives at
-`/mcp`, so point the client URL at the full path:
-
-```text
-http://<host>:<port>/mcp
-```
-
-A bare `http://<host>:<port>` returns 404 on initialize. With `--transport sse`
-the endpoint is `/sse` instead
-
 ## Development
 
 ```bash
-uv run pytest          # 23 tests
+uv run pytest          # 39 tests
 uv run pyright src tests
 ```
-
-Note: the venv is `.venv-docker` (not the host-occupied `.venv`). Typechecking
-is configured via `pyrightconfig.json` for that path
 
 ## Layout
 
 - `src/openwebui_mcp/server.py` - FastMCP server, the two tools, TLS apply, static token verifier
 - `src/openwebui_mcp/config.py` - env-driven settings
 - `src/openwebui_mcp/__main__.py` - CLI entry point
+- `skills/owui-proactive-ask/` - agent skill that forces proactive use of `ask`
 - `tests/` - config + server + TLS unit tests, incl. a protocol-level `call_tool` round trip

@@ -22,6 +22,10 @@ _AMBIENT = (
     "OWUI_TIMEOUT_MS",
     "OPENWEBUI_SSL_VERIFY",
     "OPENWEBUI_CA_BUNDLE",
+    "OPENWEBUI_ASK_DESCRIPTION",
+    "OWUI_ASK_DESCRIPTION",
+    "OPENWEBUI_INSTRUCTIONS",
+    "OWUI_INSTRUCTIONS",
 )
 
 
@@ -145,3 +149,33 @@ def test_enforce_default_model_from_env(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("OPENWEBUI_ENFORCE_DEFAULT_MODEL")
     monkeypatch.setenv("OWUI_ENFORCE_DEFAULT_MODEL", "1")
     assert Settings.from_env().enforce_default_model
+
+
+def test_ask_description_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
+    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
+    # unset stays None (fallback to built-in docstring in the server)
+    assert Settings.from_env().ask_description is None
+    monkeypatch.setenv("OPENWEBUI_ASK_DESCRIPTION", "Always answer in German")
+    assert Settings.from_env().ask_description == "Always answer in German"
+    # alias works
+    monkeypatch.delenv("OPENWEBUI_ASK_DESCRIPTION")
+    monkeypatch.setenv("OWUI_ASK_DESCRIPTION", "alias text")
+    assert Settings.from_env().ask_description == "alias text"
+
+
+def test_instructions_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
+    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
+    # unset stays None
+    assert Settings.from_env().instructions is None
+    monkeypatch.setenv(
+        "OPENWEBUI_INSTRUCTIONS", "Always use ask() for genealogy questions"
+    )
+    assert (
+        Settings.from_env().instructions == "Always use ask() for genealogy questions"
+    )
+    # alias works
+    monkeypatch.delenv("OPENWEBUI_INSTRUCTIONS")
+    monkeypatch.setenv("OWUI_INSTRUCTIONS", "use tools proactively")
+    assert Settings.from_env().instructions == "use tools proactively"
