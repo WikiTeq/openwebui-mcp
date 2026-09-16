@@ -9,11 +9,12 @@ Two tools, per spec:
 * ``list_models`` - list the models the connected Open WebUI user can see.
 
 Authentication: the server talks to Open WebUI with a bearer token carried by
-the SDK client. On SSE/streamable-http, an ``api_key`` query parameter on the
-MCP URL (``resolve_request_token``) is forwarded as that token for the
-request, so multiple users can share one HTTP endpoint under their own Open
-WebUI identity; without it (and always on stdio) the fixed
-``OPENWEBUI_API_KEY`` is used.
+the SDK client. On streamable-http, an ``api_key`` query parameter on the MCP
+URL (``resolve_request_token``) is forwarded as that token for the request, so
+multiple users can share one HTTP endpoint under their own Open WebUI
+identity; without it (and always on stdio and SSE) the fixed
+``OPENWEBUI_API_KEY`` is used. SSE cannot carry ``api_key`` past the initial
+connection - see ``resolve_request_token``.
 
 Note on the event loop: the SDK ships a sync ``run_chat`` that wraps its async
 Socket.IO runner in ``asyncio.run``. That works for the CLI (main thread, no
@@ -51,12 +52,24 @@ _TOOL_FIELDS = "tool_ids"
 def resolve_request_token(settings: Settings) -> str:
     """Resolve the Open WebUI bearer token for the current request.
 
-    On SSE/streamable-http, an ``api_key`` query parameter on the MCP URL
-    (e.g. ``https://host/mcp?api_key=sk-...``) takes priority, so multiple
-    users can share one HTTP endpoint under their own Open WebUI identity.
+    On streamable-http, an ``api_key`` query parameter on the MCP URL (e.g.
+    ``https://host/mcp?api_key=sk-...``) takes priority, so multiple users can
+    share one HTTP endpoint under their own Open WebUI identity.
     ``get_http_request()`` raises ``RuntimeError`` on stdio (no HTTP request
     exists there), and there is no query string to read even in principle, so
     that always falls through to ``settings.token``.
+
+    NOT supported on SSE, by protocol design rather than a gap here: SSE
+    splits one session into a long-lived ``GET /sse?api_key=...`` connection
+    and a separate ``POST /messages/?session_id=...`` that delivers every
+    JSON-RPC message (tool calls included). The server hands the client a bare
+    relative path for that POST endpoint; the MCP SDK's own SSE client
+    resolves it via ``urljoin``, which replaces the connection URL's query
+    string entirely - ``api_key`` never reaches the POST, for any compliant
+    SSE client. ``get_http_request()`` during tool execution returns that POST
+    request (carrying only ``session_id``), so this always falls through to
+    ``settings.token`` on SSE, same as stdio. Confirmed against a live server,
+    not just by reading the SDK source.
     """
     try:
         api_key = get_http_request().query_params.get("api_key")
@@ -106,8 +119,9 @@ def create_server(
     production (``client`` omitted) each call resolves its own Open WebUI
     identity via ``resolve_request_token`` and talks to Open WebUI through a
     fresh, cheap ``OpenWebUIClient`` built from that token - so concurrent
-    requests from different users on the same SSE/streamable-http endpoint
-    never share or race on token state.
+    requests from different users on the same streamable-http endpoint never
+    share or race on token state. See ``resolve_request_token`` for why this
+    only applies to streamable-http, not SSE.
     """
     apply_tls_settings(settings)
 

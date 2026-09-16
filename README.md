@@ -218,8 +218,8 @@ OPENWEBUI_BASE_URL=http://localhost:8080
 OPENWEBUI_API_KEY=sk-...
 ```
 
-On SSE and streamable-http, an `api_key` query parameter on the MCP URL
-overrides that fixed identity **for that request**:
+On streamable-http, an `api_key` query parameter on the MCP URL overrides
+that fixed identity **for that request**:
 
 ```text
 https://<host>:8000/mcp?api_key=sk-12345
@@ -227,9 +227,13 @@ https://<host>:8000/mcp?api_key=sk-12345
 
 This lets multiple users share one HTTP endpoint, each authenticating to
 Open WebUI as themselves instead of one fixed shared identity - handy for
-clients (e.g. Claude web) that can't set an `Authorization` header. Stdio has
-no URL, so it always uses `OPENWEBUI_API_KEY`; on SSE/streamable-http,
-`OPENWEBUI_API_KEY` is still the fallback when `api_key` is omitted
+clients (e.g. Claude web) that can't set an `Authorization` header.
+`OPENWEBUI_API_KEY` is still the fallback when `api_key` is omitted.
+
+Not supported on SSE or stdio - both always use `OPENWEBUI_API_KEY` for every
+caller. SSE can't carry `api_key` past its initial connection (the transport
+hands follow-up requests a bare relative URL, dropping the query string), and
+stdio has no URL at all
 
 ## TLS to Open WebUI
 
