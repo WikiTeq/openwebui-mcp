@@ -218,7 +218,15 @@ def create_server(
 
         from openwebui_sdk import sockets
 
-        resolved_token = resolve_request_token(settings)
+        # When a client is injected (tests), ignore the live request entirely -
+        # that instance's identity wins unconditionally, including for the
+        # tools-enabled Socket.IO path below, which takes a bare token= rather
+        # than the client object itself.
+        resolved_token = (
+            settings.token
+            if client is not None
+            else resolve_request_token(settings)
+        )
         owui = client or OpenWebUIClient(
             base_url=settings.base_url, token=resolved_token
         )

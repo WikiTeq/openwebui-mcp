@@ -10,7 +10,6 @@ from fastmcp.tools.function_tool import FunctionTool
 from openwebui_sdk import OpenWebUIClient
 from openwebui_sdk.chat import ChatResult
 from openwebui_sdk.models import Model
-from starlette.testclient import TestClient
 
 from openwebui_mcp.config import Settings
 from openwebui_mcp.server import create_server, resolve_request_token
@@ -79,29 +78,6 @@ async def _call(mcp: FastMCP, name: str, **kwargs: Any) -> Any:
 def _fake_settings(**kw: Any) -> Settings:
     base = {"base_url": "http://owui:8080", "token": "sk-x", **kw}
     return Settings(**base)
-
-
-def _initialize_status(
-    server: FastMCP, url: str, headers: dict[str, str] | None = None
-) -> int:
-    """Send an HTTP MCP initialize request and return its response status."""
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "1"},
-        },
-    }
-    request_headers = {
-        "Accept": "application/json, text/event-stream",
-        **(headers or {}),
-    }
-    app = server.http_app(path="/mcp", stateless_http=True)
-    with TestClient(app) as client:
-        return client.post(url, json=request, headers=request_headers).status_code
 
 
 def test_server_instructions_field() -> None:
@@ -339,7 +315,8 @@ async def test_ask_passes_temperature() -> None:
 @pytest.mark.anyio
 async def test_list_models_shape() -> None:
     server = create_server(
-        _fake_settings(), client=cast(OpenWebUIClient, FakeClient(models=MS_SAMPLE))
+        _fake_settings(),
+        client=cast(OpenWebUIClient, FakeClient(models=MS_SAMPLE)),
     )
     out = await _call(
         server,
@@ -376,11 +353,15 @@ async def test_ask_with_tools_timeout_passed_in_seconds(
 
 def test_no_auth_provider_configured() -> None:
     """OPENWEBUI_MCP_TOKEN is gone; the MCP endpoint has no AuthProvider."""
-    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
+    server = create_server(
+        _fake_settings(), client=cast(OpenWebUIClient, FakeClient())
+    )
     assert server.auth is None
 
 
-def test_resolve_request_token_falls_back_off_http(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_request_token_falls_back_off_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """No live HTTP request (e.g. stdio) -> falls back to settings.token."""
 
     def _raise() -> Any:
@@ -431,7 +412,9 @@ async def test_injected_client_wins_over_api_key_query_param(
         "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
     )
     fake = FakeClient(models=MS_SAMPLE)
-    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
+    server = create_server(
+        _fake_settings(), client=cast(OpenWebUIClient, fake)
+    )
     out = await _call(server, "list_models")
     assert out == [
         {"id": "m1", "name": "Model One", "tool_ids": ["t1", "t2"]},
@@ -453,60 +436,47 @@ async def test_ask_injected_client_wins_over_api_key_query_param(
         "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
     )
     fake = FakeClient()
-    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
+    server = create_server(
+        _fake_settings(), client=cast(OpenWebUIClient, fake)
+    )
     await _call(server, "ask", model="m1", prompt="hi", use_tools=False)
     # The FakeClient recorded the call -> it was used, not a client built
     # from the query param's token.
     assert fake.chat_calls[0]["model"] == "m1"
 
 
-def test_mcp_auth_accepts_api_key_query_parameter() -> None:
-    """HTTP clients without header support can authenticate through apiKey."""
-    server = create_server(
-        _fake_settings(mcp_token="s3cret"), client=cast(OpenWebUIClient, FakeClient())
-    )
-    assert _initialize_status(server, "/mcp?apiKey=s3cret") == 200
-
-
-@pytest.mark.parametrize(
-    ("url", "headers"),
-    [
-        ("/mcp", {"Authorization": "Bearer s3cret"}),
-        ("/mcp?apiKey=wrong", {"Authorization": "Bearer s3cret"}),
-    ],
-)
-def test_mcp_auth_accepts_bearer_header(
-    url: str, headers: dict[str, str]
+@pytest.mark.anyio
+async def test_ask_tools_path_ignores_api_key_when_client_injected(
+    monkeypatch: pytest.MonkeyPatch,
+    sockets_calls: list[dict[str, Any]],
 ) -> None:
-    """Bearer auth stays valid and takes precedence over the query parameter."""
-    server = create_server(
-        _fake_settings(mcp_token="s3cret"), client=cast(OpenWebUIClient, FakeClient())
-    )
-    assert _initialize_status(server, url, headers) == 200
+    """Regression: the Socket.IO tools-enabled path takes a bare token=, not
+    the client object, so it must also honor client injection and NOT leak
+    the query param's api_key into that call."""
 
+    class _FakeRequest:
+        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
 
-@pytest.mark.parametrize(
-    ("url", "headers"),
-    [
-        ("/mcp?apiKey=wrong", {}),
-        ("/mcp?apiKey=s3cret", {"Authorization": "Bearer wrong"}),
-    ],
-)
-def test_mcp_auth_rejects_invalid_credentials(
-    url: str, headers: dict[str, str]
-) -> None:
-    """Invalid query tokens fail, and a query token cannot override Bearer auth."""
-    server = create_server(
-        _fake_settings(mcp_token="s3cret"), client=cast(OpenWebUIClient, FakeClient())
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
     )
-    assert _initialize_status(server, url, headers) == 401
+    fake = FakeClient(tool_ids=["t1"])
+    server = create_server(
+        _fake_settings(), client=cast(OpenWebUIClient, fake)
+    )
+    await _call(server, "ask", model="m1", prompt="hi", use_tools=True)
+    assert sockets_calls[0]["token"] == "sk-x"  # settings.token, not sk-caller
 
 
 @pytest.mark.anyio
-async def test_call_tool_end_to_end(sockets_calls: list[dict[str, Any]]) -> None:
+async def test_call_tool_end_to_end(
+    sockets_calls: list[dict[str, Any]],
+) -> None:
     """Drive both tools through FastMCP's call_tool pipeline (protocol level)."""
     fake = FakeClient(models=MS_SAMPLE, tool_ids=["t1"])
-    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
+    server = create_server(
+        _fake_settings(), client=cast(OpenWebUIClient, fake)
+    )
 
     res = await server.call_tool("list_models", {})
     assert not res.is_error
