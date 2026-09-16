@@ -100,6 +100,11 @@ default_tools_approval_mode = "auto"
 A bare `http://<host>:8000` returns 404 on initialize; point the client URL at
 the full `/mcp` path. rmcp and other streamable-http clients use the same URL
 
+For multi-user deployments, append `?api_key=sk-...` to the URL (e.g.
+`http://<host>:8000/mcp?api_key=sk-...`) so each client authenticates to Open
+WebUI with their own key instead of the server's fixed `OPENWEBUI_API_KEY` -
+see Authentication
+
 </details>
 
 ## Proactive ask skill
@@ -205,27 +210,26 @@ model `id`, display `name` and the `tool_ids` attached to it
 
 ## Authentication
 
-Token-based, in two layers
+Token-based. The server talks to Open WebUI as `Authorization: Bearer
+<token>`. The default identity comes from env:
 
-1. **Open WebUI access** (required). The server talks to Open WebUI as
-   `Authorization: Bearer <token>`. Provide an API key or JWT via env:
+```env
+OPENWEBUI_BASE_URL=http://localhost:8080
+OPENWEBUI_API_KEY=sk-...
+```
 
-   ```env
-   OPENWEBUI_BASE_URL=http://localhost:8080
-   OPENWEBUI_API_KEY=sk-...
-   ```
+On SSE and streamable-http, an `api_key` query parameter on the MCP URL
+overrides that fixed identity **for that request**:
 
-2. **MCP endpoint auth** (optional). Set `OPENWEBUI_MCP_TOKEN=<token>` to make
-   the MCP server itself require the token on every request. Clients can send
-   it as `Authorization: Bearer <token>` or in the MCP URL:
+```text
+https://<host>:8000/mcp?api_key=sk-12345
+```
 
-   ```text
-   https://myserver.example/mcp?apiKey=<token>
-   ```
-
-   The Bearer header takes precedence when both forms are present. Prefer the
-   header when supported because URLs can appear in browser history, proxy
-   logs, and monitoring data. Unset, the endpoint is open to its listeners
+This lets multiple users share one HTTP endpoint, each authenticating to
+Open WebUI as themselves instead of one fixed shared identity - handy for
+clients (e.g. Claude web) that can't set an `Authorization` header. Stdio has
+no URL, so it always uses `OPENWEBUI_API_KEY`; on SSE/streamable-http,
+`OPENWEBUI_API_KEY` is still the fallback when `api_key` is omitted
 
 ## TLS to Open WebUI
 
@@ -277,7 +281,6 @@ defined env var in each alias list
 | Enforce default model | `OPENWEBUI_ENFORCE_DEFAULT_MODEL`, `OWUI_ENFORCE_DEFAULT_MODEL` | `false` |
 | `ask` tool description | `OPENWEBUI_ASK_DESCRIPTION`, `OWUI_ASK_DESCRIPTION` | built-in docstring |
 | Server instructions | `OPENWEBUI_INSTRUCTIONS`, `OWUI_INSTRUCTIONS` | none |
-| MCP endpoint token | `OPENWEBUI_MCP_TOKEN`, `OWUI_MCP_TOKEN` | none |
 | Transport | `OPENWEBUI_MCP_TRANSPORT` | `stdio` |
 | Chat timeout ms | `OWUI_TIMEOUT_MS` | `120000` |
 | Open WebUI CA bundle | `OPENWEBUI_CA_BUNDLE`, `OWUI_CA_BUNDLE` | none |

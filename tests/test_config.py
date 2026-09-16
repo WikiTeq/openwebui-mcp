@@ -42,7 +42,6 @@ def test_from_env_basic(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.base_url == "http://owui:8080"
     assert s.token == "sk-123"
     assert s.transport == "stdio"
-    assert s.mcp_token is None
     assert s.timeout_ms == 120_000
 
 
@@ -62,15 +61,11 @@ def test_from_env_alias_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.token == "key-first"
 
 
-def test_from_env_mcp_token_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OVERRIDE_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OVERRIDE_KEY", "k")
+def test_from_env_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
     monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
-    monkeypatch.setenv("OPENWEBUI_MCP_TOKEN", "s3cret")
     monkeypatch.setenv("OWUI_TIMEOUT_MS", "30000")
     s = Settings.from_env()
-    assert s.mcp_token == "s3cret"
     assert s.timeout_ms == 30_000
 
 

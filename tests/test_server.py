@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from fastmcp import FastMCP
@@ -13,7 +13,7 @@ from openwebui_sdk.models import Model
 from starlette.testclient import TestClient
 
 from openwebui_mcp.config import Settings
-from openwebui_mcp.server import StaticTokenVerifier, create_server
+from openwebui_mcp.server import create_server, resolve_request_token
 
 MS_SAMPLE = [
     Model(id="m1", name="Model One", tool_ids=["t1", "t2"]),
@@ -374,25 +374,90 @@ async def test_ask_with_tools_timeout_passed_in_seconds(
     assert sockets_calls[0]["timeout"] == 120
 
 
-def test_mcp_auth_wired_when_token_set() -> None:
-    server = create_server(
-        _fake_settings(mcp_token="s3cret"), client=cast(OpenWebUIClient, FakeClient())
-    )
-    assert isinstance(server.auth, StaticTokenVerifier)
-
-
-def test_mcp_auth_absent_without_token() -> None:
+def test_no_auth_provider_configured() -> None:
+    """OPENWEBUI_MCP_TOKEN is gone; the MCP endpoint has no AuthProvider."""
     server = create_server(_fake_settings(), client=cast(OpenWebUIClient, FakeClient()))
     assert server.auth is None
 
 
+def test_resolve_request_token_falls_back_off_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No live HTTP request (e.g. stdio) -> falls back to settings.token."""
+
+    def _raise() -> Any:
+        raise RuntimeError("no active HTTP request")
+
+    monkeypatch.setattr("openwebui_mcp.server.get_http_request", _raise)
+    assert resolve_request_token(_fake_settings()) == "sk-x"
+
+
+def test_resolve_request_token_uses_api_key_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ?api_key=... query param on the MCP URL wins over the fixed token."""
+
+    class _FakeRequest:
+        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
+
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+    )
+    assert resolve_request_token(_fake_settings()) == "sk-caller"
+
+
+def test_resolve_request_token_falls_back_when_api_key_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live HTTP request with no api_key query param -> falls back."""
+
+    class _FakeRequest:
+        query_params: ClassVar[dict[str, str]] = {}
+
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+    )
+    assert resolve_request_token(_fake_settings()) == "sk-x"
+
+
 @pytest.mark.anyio
-async def test_static_verifier_accepts_and_rejects() -> None:
-    verifier = StaticTokenVerifier("right-token")
-    ok = await verifier.verify_token("right-token")
-    assert ok is not None
-    assert await verifier.verify_token("wrong-token") is None
-    assert await verifier.verify_token("") is None
+async def test_injected_client_wins_over_api_key_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """create_server(..., client=...) is used unconditionally, api_key or not."""
+
+    class _FakeRequest:
+        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
+
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+    )
+    fake = FakeClient(models=MS_SAMPLE)
+    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
+    out = await _call(server, "list_models")
+    assert out == [
+        {"id": "m1", "name": "Model One", "tool_ids": ["t1", "t2"]},
+        {"id": "m2", "name": "Model Two", "tool_ids": []},
+    ]
+
+
+@pytest.mark.anyio
+async def test_ask_injected_client_wins_over_api_key_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ask() uses the injected client for both tools and no-tools paths,
+    even when a request carries an ?api_key= query param."""
+
+    class _FakeRequest:
+        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
+
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+    )
+    fake = FakeClient()
+    server = create_server(_fake_settings(), client=cast(OpenWebUIClient, fake))
+    await _call(server, "ask", model="m1", prompt="hi", use_tools=False)
+    # The FakeClient recorded the call -> it was used, not a client built
+    # from the query param's token.
+    assert fake.chat_calls[0]["model"] == "m1"
 
 
 def test_mcp_auth_accepts_api_key_query_parameter() -> None:

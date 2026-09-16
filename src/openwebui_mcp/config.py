@@ -17,13 +17,17 @@ logger = logging.getLogger(__name__)
 
 # Accepted env var names, in precedence order, for each setting.
 _BASE_URL_VARS = ("OPENWEBUI_BASE_URL", "OPENWEBUI_URL", "OWUI_URL")
-_TOKEN_VARS = ("OPENWEBUI_API_KEY", "OPENWEBUI_TOKEN", "OWUI_API_KEY", "OWUI_TOKEN")
+_TOKEN_VARS = (
+    "OPENWEBUI_API_KEY",
+    "OPENWEBUI_TOKEN",
+    "OWUI_API_KEY",
+    "OWUI_TOKEN",
+)
 _DEFAULT_MODEL_VARS = ("OPENWEBUI_DEFAULT_MODEL", "OWUI_DEFAULT_MODEL")
 _ENFORCE_DEFAULT_MODEL_VARS = (
     "OPENWEBUI_ENFORCE_DEFAULT_MODEL",
     "OWUI_ENFORCE_DEFAULT_MODEL",
 )
-_MCP_TOKEN_VARS = ("OPENWEBUI_MCP_TOKEN", "OWUI_MCP_TOKEN")
 _TRANSPORT_VARS = ("OPENWEBUI_MCP_TRANSPORT", "OWUI_MCP_TRANSPORT")
 _SSL_CA_VARS = ("OPENWEBUI_CA_BUNDLE", "OWUI_CA_BUNDLE")
 _SSL_VERIFY_VARS = ("OPENWEBUI_SSL_VERIFY", "OWUI_SSL_VERIFY")
@@ -65,10 +69,10 @@ class Settings:
     """Resolved server configuration.
 
     ``base_url`` and ``token`` are required: they are the Open WebUI server the
-    SDK talks to and the bearer token (API key) used for authentication.
-    ``mcp_token`` is optional and, when set, turns on token auth for the MCP
-    endpoint itself through a Bearer header or ``apiKey`` URL parameter (see
-    ``server.create_server``).
+    SDK talks to and the bearer token (API key) used for authentication as a
+    fallback when a request carries no per-request ``api_key`` (see
+    ``server.create_server`` for the SSE/streamable-http ``api_key`` query
+    parameter, which takes priority over this fixed token for that request).
     """
 
     base_url: str
@@ -79,7 +83,6 @@ class Settings:
     # When true, ``ask`` always uses ``default_model`` and ignores the caller's
     # ``model`` argument (must be paired with ``default_model``).
     enforce_default_model: bool = False
-    mcp_token: str | None = None
     timeout_ms: int = 120_000
     transport: Transport = "stdio"
     host: str = "127.0.0.1"
@@ -108,9 +111,12 @@ class Settings:
                 "and OPENWEBUI_API_KEY (or the aliases OPENWEBUI_URL / "
                 "OPENWEBUI_TOKEN)"
             )
-        mcp_token = overrides.get("mcp_token") or _first(*_MCP_TOKEN_VARS)
-        default_model = overrides.get("default_model") or _first(*_DEFAULT_MODEL_VARS)
-        transport = overrides.get("transport") or _first(*_TRANSPORT_VARS) or "stdio"
+        default_model = overrides.get("default_model") or _first(
+            *_DEFAULT_MODEL_VARS
+        )
+        transport = (
+            overrides.get("transport") or _first(*_TRANSPORT_VARS) or "stdio"
+        )
         if transport not in _VALID_TRANSPORTS:
             raise ValueError(
                 f"invalid transport {transport!r}; pick one of "
@@ -121,7 +127,8 @@ class Settings:
         transport = cast(Transport, transport)
         try:
             timeout_ms = int(
-                overrides.get("timeout_ms") or os.getenv("OWUI_TIMEOUT_MS", "120000")
+                overrides.get("timeout_ms")
+                or os.getenv("OWUI_TIMEOUT_MS", "120000")
             )
         except ValueError as exc:
             raise ValueError(f"invalid OWUI_TIMEOUT_MS: {exc}") from exc
@@ -143,7 +150,6 @@ class Settings:
             base_url=base_url,
             token=token,
             name=overrides.get("name", "openwebui"),
-            mcp_token=mcp_token,
             default_model=default_model,
             enforce_default_model=enforce_raw.strip().lower()
             not in ("0", "false", "no", "off"),
@@ -151,9 +157,12 @@ class Settings:
             timeout_ms=timeout_ms,
             host=overrides.get("host", "127.0.0.1"),
             port=port,
-            ssl_ca_bundle=overrides.get("ssl_ca_bundle") or _first(*_SSL_CA_VARS),
-            ssl_verify=verify_raw.strip().lower() not in ("0", "false", "no", "off"),
+            ssl_ca_bundle=overrides.get("ssl_ca_bundle")
+            or _first(*_SSL_CA_VARS),
+            ssl_verify=verify_raw.strip().lower()
+            not in ("0", "false", "no", "off"),
             ask_description=overrides.get("ask_description")
             or _first(*_ASK_DESCRIPTION_VARS),
-            instructions=overrides.get("instructions") or _first(*_INSTRUCTIONS_VARS),
+            instructions=overrides.get("instructions")
+            or _first(*_INSTRUCTIONS_VARS),
         )
