@@ -11,10 +11,6 @@ _AMBIENT = (
     "OPENWEBUI_BASE_URL",
     "OPENWEBUI_URL",
     "OWUI_URL",
-    "OPENWEBUI_API_KEY",
-    "OPENWEBUI_TOKEN",
-    "OWUI_API_KEY",
-    "OWUI_TOKEN",
     "OPENWEBUI_DEFAULT_MODEL",
     "OWUI_DEFAULT_MODEL",
     "OPENWEBUI_ENFORCE_DEFAULT_MODEL",
@@ -36,16 +32,15 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_from_env_basic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """base_url alone is enough - there is no Open WebUI token setting."""
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://owui:8080")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "sk-123")
     s = Settings.from_env()
     assert s.base_url == "http://owui:8080"
-    assert s.token == "sk-123"
     assert s.transport == "stdio"
     assert s.timeout_ms == 120_000
 
 
-def test_from_env_missing_raises() -> None:
+def test_from_env_missing_base_url_raises() -> None:
     with pytest.raises(ValueError, match="not configured"):
         Settings.from_env()
 
@@ -54,16 +49,12 @@ def test_from_env_alias_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     # First listed alias wins over the later fallbacks.
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "first")
     monkeypatch.setenv("OPENWEBUI_URL", "second")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "key-first")
-    monkeypatch.setenv("OPENWEBUI_TOKEN", "key-second")
     s = Settings.from_env()
     assert s.base_url == "first"
-    assert s.token == "key-first"
 
 
 def test_from_env_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     monkeypatch.setenv("OWUI_TIMEOUT_MS", "30000")
     s = Settings.from_env()
     assert s.timeout_ms == 30_000
@@ -71,7 +62,6 @@ def test_from_env_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_from_env_invalid_transport_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     monkeypatch.setenv("OPENWEBUI_MCP_TRANSPORT", "telepathy")
     with pytest.raises(ValueError, match="invalid transport"):
         Settings.from_env()
@@ -79,7 +69,6 @@ def test_from_env_invalid_transport_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_from_env_overrides_win(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     s = Settings.from_env(transport="streamable-http", name="custom")
     assert s.transport == "streamable-http"
     assert s.name == "custom"
@@ -87,7 +76,6 @@ def test_from_env_overrides_win(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tls_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     monkeypatch.setenv("OPENWEBUI_SSL_VERIFY", "false")
     monkeypatch.setenv("OPENWEBUI_CA_BUNDLE", "/etc/owui-ca.pem")
     s = Settings.from_env()
@@ -97,21 +85,18 @@ def test_tls_env_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_tls_verify_defaults_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     assert Settings.from_env().ssl_verify  # truthy when "true"
     assert Settings.from_env().ssl_ca_bundle is None
 
 
 def test_default_model_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     monkeypatch.setenv("OPENWEBUI_DEFAULT_MODEL", "sample-workspace-model-1")
     assert Settings.from_env().default_model == "sample-workspace-model-1"
 
 
 def test_default_model_alias_and_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     # alias works
     monkeypatch.setenv("OWUI_DEFAULT_MODEL", "m-alias")
     assert Settings.from_env().default_model == "m-alias"
@@ -128,7 +113,6 @@ def test_default_model_alias_and_empty(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_enforce_default_model_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     monkeypatch.setenv("OPENWEBUI_DEFAULT_MODEL", "m1")
     # defaults to False when unset
     assert not Settings.from_env().enforce_default_model
@@ -148,7 +132,6 @@ def test_enforce_default_model_from_env(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_ask_description_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     # unset stays None (fallback to built-in docstring in the server)
     assert Settings.from_env().ask_description is None
     monkeypatch.setenv("OPENWEBUI_ASK_DESCRIPTION", "Always answer in German")
@@ -161,7 +144,6 @@ def test_ask_description_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_instructions_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
-    monkeypatch.setenv("OPENWEBUI_API_KEY", "k")
     # unset stays None
     assert Settings.from_env().instructions is None
     monkeypatch.setenv(

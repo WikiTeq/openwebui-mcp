@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from fastmcp import FastMCP
@@ -76,7 +77,7 @@ async def _call(mcp: FastMCP, name: str, **kwargs: Any) -> Any:
 
 
 def _fake_settings(**kw: Any) -> Settings:
-    base = {"base_url": "http://owui:8080", "token": "sk-x", **kw}
+    base = {"base_url": "http://owui:8080", **kw}
     return Settings(**base)
 
 
@@ -359,57 +360,112 @@ def test_no_auth_provider_configured() -> None:
     assert server.auth is None
 
 
-def test_resolve_request_token_falls_back_off_http(
+def test_resolve_request_token_stdio_always_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No live HTTP request (e.g. stdio) -> falls back to settings.token."""
+    """stdio has no per-request channel and no configured fallback - a tool
+    call made over stdio always fails with a clear error."""
 
     def _raise() -> Any:
         raise RuntimeError("no active HTTP request")
 
     monkeypatch.setattr("openwebui_mcp.server.get_http_request", _raise)
-    assert resolve_request_token(_fake_settings()) == "sk-x"
+    with pytest.raises(ValueError, match="no Open WebUI identity available"):
+        resolve_request_token()
 
 
-def test_resolve_request_token_uses_api_key_query_param(
+def _fake_request(
+    query_params: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """Minimal stand-in for the Starlette Request resolve_request_token reads."""
+    return SimpleNamespace(query_params=query_params or {}, headers=headers or {})
+
+
+def test_resolve_request_token_uses_bearer_header(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An ?api_key=... query param on the MCP URL wins over the fixed token."""
-
-    class _FakeRequest:
-        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
-
+    """An Authorization: Bearer header on the request is used."""
     monkeypatch.setattr(
-        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(headers={"authorization": "Bearer sk-caller"}),
     )
-    assert resolve_request_token(_fake_settings()) == "sk-caller"
+    assert resolve_request_token() == "sk-caller"
 
 
-def test_resolve_request_token_falls_back_when_api_key_absent(
+def test_resolve_request_token_uses_apikey_query_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A live HTTP request with no api_key query param -> falls back."""
-
-    class _FakeRequest:
-        query_params: ClassVar[dict[str, str]] = {}
-
+    """An ?apiKey=... query param on the MCP URL is used when there's no header."""
     monkeypatch.setattr(
-        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(query_params={"apiKey": "sk-caller"}),
     )
-    assert resolve_request_token(_fake_settings()) == "sk-x"
+    assert resolve_request_token() == "sk-caller"
+
+
+def test_resolve_request_token_bearer_header_wins_over_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both are present on one request, the header takes priority."""
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(
+            query_params={"apiKey": "sk-from-query"},
+            headers={"authorization": "Bearer sk-from-header"},
+        ),
+    )
+    assert resolve_request_token() == "sk-from-header"
+
+
+def test_resolve_request_token_empty_bearer_falls_through_to_query_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a present-but-empty `Authorization: Bearer ` header must
+    not win over a real apiKey query param, or silently resolve to "" as if
+    it were a real credential."""
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(
+            query_params={"apiKey": "sk-from-query"},
+            headers={"authorization": "Bearer "},
+        ),
+    )
+    assert resolve_request_token() == "sk-from-query"
+
+
+def test_resolve_request_token_empty_bearer_alone_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A present-but-empty Bearer header with no apiKey either -> the normal
+    "no credential" error, not a silent empty-string token."""
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(headers={"authorization": "Bearer "}),
+    )
+    with pytest.raises(ValueError, match="no Open WebUI identity supplied"):
+        resolve_request_token()
+
+
+def test_resolve_request_token_http_raises_without_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An HTTP request with neither header nor query param raises."""
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _fake_request()
+    )
+    with pytest.raises(ValueError, match="no Open WebUI identity supplied"):
+        resolve_request_token()
 
 
 @pytest.mark.anyio
-async def test_injected_client_wins_over_api_key_query_param(
+async def test_injected_client_wins_over_apikey_query_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """create_server(..., client=...) is used unconditionally, api_key or not."""
-
-    class _FakeRequest:
-        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
-
+    """create_server(..., client=...) is used unconditionally, apiKey or not."""
     monkeypatch.setattr(
-        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(query_params={"apiKey": "sk-caller"}),
     )
     fake = FakeClient(models=MS_SAMPLE)
     server = create_server(
@@ -423,17 +479,14 @@ async def test_injected_client_wins_over_api_key_query_param(
 
 
 @pytest.mark.anyio
-async def test_ask_injected_client_wins_over_api_key_query_param(
+async def test_ask_injected_client_wins_over_apikey_query_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ask() uses the injected client for both tools and no-tools paths,
-    even when a request carries an ?api_key= query param."""
-
-    class _FakeRequest:
-        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
-
+    even when a request carries an ?apiKey= query param."""
     monkeypatch.setattr(
-        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(query_params={"apiKey": "sk-caller"}),
     )
     fake = FakeClient()
     server = create_server(
@@ -446,26 +499,23 @@ async def test_ask_injected_client_wins_over_api_key_query_param(
 
 
 @pytest.mark.anyio
-async def test_ask_tools_path_ignores_api_key_when_client_injected(
+async def test_ask_tools_path_ignores_apikey_when_client_injected(
     monkeypatch: pytest.MonkeyPatch,
     sockets_calls: list[dict[str, Any]],
 ) -> None:
     """Regression: the Socket.IO tools-enabled path takes a bare token=, not
     the client object, so it must also honor client injection and NOT leak
-    the query param's api_key into that call."""
-
-    class _FakeRequest:
-        query_params: ClassVar[dict[str, str]] = {"api_key": "sk-caller"}
-
+    the query param's apiKey into that call."""
     monkeypatch.setattr(
-        "openwebui_mcp.server.get_http_request", lambda: _FakeRequest()
+        "openwebui_mcp.server.get_http_request",
+        lambda: _fake_request(query_params={"apiKey": "sk-caller"}),
     )
     fake = FakeClient(tool_ids=["t1"])
     server = create_server(
         _fake_settings(), client=cast(OpenWebUIClient, fake)
     )
     await _call(server, "ask", model="m1", prompt="hi", use_tools=True)
-    assert sockets_calls[0]["token"] == "sk-x"  # settings.token, not sk-caller
+    assert sockets_calls[0]["token"] == ""  # inert placeholder, not sk-caller
 
 
 @pytest.mark.anyio

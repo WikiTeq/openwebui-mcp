@@ -9,12 +9,13 @@ Two tools, per spec:
 * ``list_models`` - list the models the connected Open WebUI user can see.
 
 Authentication: the server talks to Open WebUI with a bearer token carried by
-the SDK client. On streamable-http, an ``api_key`` query parameter on the MCP
-URL (``resolve_request_token``) is forwarded as that token for the request, so
-multiple users can share one HTTP endpoint under their own Open WebUI
-identity; without it (and always on stdio and SSE) the fixed
-``OPENWEBUI_API_KEY`` is used. SSE cannot carry ``api_key`` past the initial
-connection - see ``resolve_request_token``.
+the SDK client. There is no pre-configured fallback identity on any
+transport: every caller supplies their own via an ``Authorization: Bearer``
+header or an ``apiKey`` query parameter on the MCP URL
+(``resolve_request_token``), so multiple users can share one HTTP endpoint
+under their own Open WebUI identity. A request with neither credential
+fails. stdio has no per-request channel at all (no URL, no headers), so
+every tool call made over stdio fails.
 
 Note on the event loop: the SDK ships a sync ``run_chat`` that wraps its async
 Socket.IO runner in ``asyncio.run``. That works for the CLI (main thread, no
@@ -49,33 +50,59 @@ logger = logging.getLogger(__name__)
 _TOOL_FIELDS = "tool_ids"
 
 
-def resolve_request_token(settings: Settings) -> str:
+def resolve_request_token() -> str:
     """Resolve the Open WebUI bearer token for the current request.
 
-    On streamable-http, an ``api_key`` query parameter on the MCP URL (e.g.
-    ``https://host/mcp?api_key=sk-...``) takes priority, so multiple users can
-    share one HTTP endpoint under their own Open WebUI identity.
-    ``get_http_request()`` raises ``RuntimeError`` on stdio (no HTTP request
-    exists there), and there is no query string to read even in principle, so
-    that always falls through to ``settings.token``.
+    There is no pre-configured fallback identity: every caller supplies their
+    own, checked in this order:
 
-    NOT supported on SSE, by protocol design rather than a gap here: SSE
-    splits one session into a long-lived ``GET /sse?api_key=...`` connection
-    and a separate ``POST /messages/?session_id=...`` that delivers every
-    JSON-RPC message (tool calls included). The server hands the client a bare
-    relative path for that POST endpoint; the MCP SDK's own SSE client
-    resolves it via ``urljoin``, which replaces the connection URL's query
-    string entirely - ``api_key`` never reaches the POST, for any compliant
-    SSE client. ``get_http_request()`` during tool execution returns that POST
-    request (carrying only ``session_id``), so this always falls through to
-    ``settings.token`` on SSE, same as stdio. Confirmed against a live server,
-    not just by reading the SDK source.
+    1. ``Authorization: Bearer <token>`` header.
+    2. ``apiKey`` query parameter on the MCP URL (e.g.
+       ``https://host/mcp?apiKey=sk-...``).
+
+    The ``Authorization`` header works on both streamable-http and SSE. The
+    ``apiKey`` query parameter works on streamable-http only - see the SSE
+    note below for why. The header wins when both are present (and a
+    present-but-empty ``Bearer`` header does not count as supplied - it falls
+    through to ``apiKey``, then to the "no credential" error below). A
+    request with neither credential raises - including on stdio, which has
+    no per-request channel at all (no URL, no headers) and therefore always
+    raises here.
+
+    SSE note: unlike the query parameter, the Bearer header survives SSE's
+    split between the long-lived ``GET /sse`` connection and the follow-up
+    ``POST /messages/?session_id=...`` that delivers each JSON-RPC message. A
+    header is configured once on the client and resent on every request that
+    client makes; a URL query string is not - it lives only on the one
+    connection URL, and the SDK's SSE client resolves the server's relative
+    message-endpoint path via ``urljoin``, which drops it. Confirmed live,
+    both with a raw HTTP client and with the real ``mcp`` SDK's own SSE
+    client (``mcp.client.sse.sse_client``), which posts through the very
+    same client instance - and therefore the same configured headers - used
+    for the GET connection.
     """
     try:
-        api_key = get_http_request().query_params.get("api_key")
+        request = get_http_request()
     except RuntimeError:
-        api_key = None
-    return api_key or settings.token
+        raise ValueError(
+            "no Open WebUI identity available: stdio transport has no "
+            "per-request channel to supply one"
+        ) from None
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        bearer_token = auth_header[len("bearer ") :].strip()
+        if bearer_token:
+            return bearer_token
+
+    api_key = request.query_params.get("apiKey")
+    if api_key:
+        return api_key
+
+    raise ValueError(
+        "no Open WebUI identity supplied: pass an Authorization: Bearer "
+        "header or an apiKey query parameter"
+    )
 
 
 def ask_description(fn: Any, settings: Settings) -> str:
@@ -115,13 +142,12 @@ def create_server(
     """Build a configured FastMCP instance exposing the Open WebUI tools.
 
     ``client`` is injectable for tests; when given, that exact instance is
-    used for every call, regardless of any per-request ``api_key``. In
+    used for every call, regardless of any per-request identity. In
     production (``client`` omitted) each call resolves its own Open WebUI
     identity via ``resolve_request_token`` and talks to Open WebUI through a
     fresh, cheap ``OpenWebUIClient`` built from that token - so concurrent
-    requests from different users on the same streamable-http endpoint never
-    share or race on token state. See ``resolve_request_token`` for why this
-    only applies to streamable-http, not SSE.
+    requests from different users on the same HTTP endpoint never share or
+    race on token state.
     """
     apply_tls_settings(settings)
 
@@ -147,7 +173,7 @@ def create_server(
         argument of the ``ask`` tool.
         """
         owui = client or OpenWebUIClient(
-            base_url=settings.base_url, token=resolve_request_token(settings)
+            base_url=settings.base_url, token=resolve_request_token()
         )
         return await asyncio.to_thread(_list_models_sync, owui)
 
@@ -222,11 +248,7 @@ def create_server(
         # that instance's identity wins unconditionally, including for the
         # tools-enabled Socket.IO path below, which takes a bare token= rather
         # than the client object itself.
-        resolved_token = (
-            settings.token
-            if client is not None
-            else resolve_request_token(settings)
-        )
+        resolved_token = "" if client is not None else resolve_request_token()
         owui = client or OpenWebUIClient(
             base_url=settings.base_url, token=resolved_token
         )

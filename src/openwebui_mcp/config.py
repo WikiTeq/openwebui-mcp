@@ -17,12 +17,6 @@ logger = logging.getLogger(__name__)
 
 # Accepted env var names, in precedence order, for each setting.
 _BASE_URL_VARS = ("OPENWEBUI_BASE_URL", "OPENWEBUI_URL", "OWUI_URL")
-_TOKEN_VARS = (
-    "OPENWEBUI_API_KEY",
-    "OPENWEBUI_TOKEN",
-    "OWUI_API_KEY",
-    "OWUI_TOKEN",
-)
 _DEFAULT_MODEL_VARS = ("OPENWEBUI_DEFAULT_MODEL", "OWUI_DEFAULT_MODEL")
 _ENFORCE_DEFAULT_MODEL_VARS = (
     "OPENWEBUI_ENFORCE_DEFAULT_MODEL",
@@ -68,15 +62,16 @@ def load_dotenv(path: str | Path | None = None) -> None:
 class Settings:
     """Resolved server configuration.
 
-    ``base_url`` and ``token`` are required: they are the Open WebUI server the
-    SDK talks to and the bearer token (API key) used for authentication as a
-    fallback when a request carries no per-request ``api_key`` (see
-    ``server.create_server`` for the SSE/streamable-http ``api_key`` query
-    parameter, which takes priority over this fixed token for that request).
+    ``base_url`` is required: the Open WebUI server the SDK talks to. There is
+    no pre-configured Open WebUI bearer token setting - every caller supplies
+    their own identity per request, via the ``apiKey`` query parameter or an
+    ``Authorization: Bearer`` header (see ``server.resolve_request_token``).
+    This applies to every transport, including stdio: a tool call made over
+    stdio has no per-request channel to carry a credential and no configured
+    fallback either, so it always fails with a clear error.
     """
 
     base_url: str
-    token: str
     name: str = "openwebui"
     # Model used by ``ask`` when the caller does not pass one explicitly.
     default_model: str | None = None
@@ -104,12 +99,10 @@ class Settings:
     def from_env(cls, **overrides: str) -> Settings:
         """Build settings from env vars; ``overrides`` win for tests/callers."""
         base_url = _first(*_BASE_URL_VARS) or overrides.get("base_url")
-        token = _first(*_TOKEN_VARS) or overrides.get("token")
-        if not base_url or not token:
+        if not base_url:
             raise ValueError(
                 "Open WebUI connection not configured: set OPENWEBUI_BASE_URL "
-                "and OPENWEBUI_API_KEY (or the aliases OPENWEBUI_URL / "
-                "OPENWEBUI_TOKEN)"
+                "(or the alias OPENWEBUI_URL)"
             )
         default_model = overrides.get("default_model") or _first(
             *_DEFAULT_MODEL_VARS
@@ -148,7 +141,6 @@ class Settings:
         )
         return cls(
             base_url=base_url,
-            token=token,
             name=overrides.get("name", "openwebui"),
             default_model=default_model,
             enforce_default_model=enforce_raw.strip().lower()
