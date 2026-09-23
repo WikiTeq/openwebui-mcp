@@ -29,10 +29,11 @@ Point your MCP client at `http://<host>:8000/mcp?apiKey=sk-...` (or send an
 
 > [!IMPORTANT]
 > stdio transport (the MCP SDK default) has no per-request channel at all -
-> no URL, no headers - and no configured fallback identity either. The
-> server still starts and speaks the protocol over stdio, but every `ask`
-> and `list_models` call fails with a clear error. Use streamable-http or
-> SSE for anything that actually calls a tool.
+> no URL, no headers. It falls back to a single, server-wide
+> `OPENWEBUI_API_KEY` instead (see Authentication) - without that set,
+> every `ask` and `list_models` call over stdio fails with a clear error.
+> Prefer streamable-http or SSE for multi-user deployments, since stdio has
+> no way to give each caller their own identity.
 
 ### Connect an MCP client
 
@@ -222,13 +223,16 @@ set an `Authorization` header, via the query parameter instead. A request
 with neither credential fails - there is no shared fallback identity to
 silently use.
 
-There is no Open WebUI token setting at all - stdio transport has no
-per-request channel (no URL, no headers) to carry one, and there is no
-server-side fallback either, so every `ask` and `list_models` call made
-over stdio fails. Only `OPENWEBUI_BASE_URL` is needed:
+stdio transport has no per-request channel (no URL, no headers) to carry a
+caller's own identity, so it falls back to a single, server-wide
+`OPENWEBUI_API_KEY` instead. That setting is **only** read on stdio - it is
+never consulted on streamable-http or SSE, so it can't leak into another
+caller's request there. Without it set, every `ask` and `list_models` call
+made over stdio fails:
 
 ```env
 OPENWEBUI_BASE_URL=http://localhost:8080
+OPENWEBUI_API_KEY=sk-...  # stdio only; ignored on streamable-http/SSE
 ```
 
 ## TLS to Open WebUI
@@ -276,6 +280,7 @@ defined env var in each alias list
 | Setting | Env vars (first wins) | Default |
 | --- | --- | --- |
 | Open WebUI URL | `OPENWEBUI_BASE_URL`, `OPENWEBUI_URL`, `OWUI_URL` | required |
+| Open WebUI API key (stdio only, see Authentication) | `OPENWEBUI_API_KEY`, `OWUI_API_KEY` | none |
 | Default model for `ask` | `OPENWEBUI_DEFAULT_MODEL`, `OWUI_DEFAULT_MODEL` | none |
 | Enforce default model | `OPENWEBUI_ENFORCE_DEFAULT_MODEL`, `OWUI_ENFORCE_DEFAULT_MODEL` | `false` |
 | `ask` tool description | `OPENWEBUI_ASK_DESCRIPTION`, `OWUI_ASK_DESCRIPTION` | built-in docstring |
@@ -288,7 +293,7 @@ defined env var in each alias list
 ## Run
 
 ```bash
-uv run openwebui-mcp                      # stdio (default) - see Authentication: no tool call can succeed
+uv run openwebui-mcp                      # stdio (default) - needs OPENWEBUI_API_KEY, see Authentication
 uv run openwebui-mcp --transport sse      # SSE over HTTP
 uv run openwebui-mcp --transport streamable-http --host 0.0.0.0 --port 8000
 ```

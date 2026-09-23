@@ -9,13 +9,15 @@ Two tools, per spec:
 * ``list_models`` - list the models the connected Open WebUI user can see.
 
 Authentication: the server talks to Open WebUI with a bearer token carried by
-the SDK client. There is no pre-configured fallback identity on any
-transport: every caller supplies their own via an ``Authorization: Bearer``
-header or an ``apiKey`` query parameter on the MCP URL
+the SDK client. On streamable-http and SSE there is no pre-configured
+fallback identity: every caller supplies their own via an ``Authorization:
+Bearer`` header or an ``apiKey`` query parameter on the MCP URL
 (``resolve_request_token``), so multiple users can share one HTTP endpoint
 under their own Open WebUI identity. A request with neither credential
-fails. stdio has no per-request channel at all (no URL, no headers), so
-every tool call made over stdio fails.
+fails. stdio has no per-request channel at all (no URL, no headers), so it
+falls back to ``OPENWEBUI_API_KEY`` (``settings.token``) - the only
+transport where that setting is used; a stdio call fails only when that
+fallback is also unset.
 
 Note on the event loop: the SDK ships a sync ``run_chat`` that wraps its async
 Socket.IO runner in ``asyncio.run``. That works for the CLI (main thread, no
@@ -50,11 +52,12 @@ logger = logging.getLogger(__name__)
 _TOOL_FIELDS = "tool_ids"
 
 
-def resolve_request_token() -> str:
+def resolve_request_token(settings: Settings) -> str:
     """Resolve the Open WebUI bearer token for the current request.
 
-    There is no pre-configured fallback identity: every caller supplies their
-    own, checked in this order:
+    On streamable-http and SSE, every caller supplies their own identity -
+    ``settings.token`` is never consulted on those transports, so one
+    caller's key can't leak into another's request. Checked in this order:
 
     1. ``Authorization: Bearer <token>`` header.
     2. ``apiKey`` query parameter on the MCP URL (e.g.
@@ -64,10 +67,13 @@ def resolve_request_token() -> str:
     ``apiKey`` query parameter works on streamable-http only - see the SSE
     note below for why. The header wins when both are present (and a
     present-but-empty ``Bearer`` header does not count as supplied - it falls
-    through to ``apiKey``, then to the "no credential" error below). A
-    request with neither credential raises - including on stdio, which has
-    no per-request channel at all (no URL, no headers) and therefore always
-    raises here.
+    through to ``apiKey``, then to the "no credential" error below). An HTTP
+    request with neither credential raises.
+
+    stdio has no per-request channel at all (no URL, no headers), so it
+    falls back to ``settings.token`` (``OPENWEBUI_API_KEY``) - the only
+    transport where that setting is read. No configured token there raises
+    too.
 
     SSE note: unlike the query parameter, the Bearer header survives SSE's
     split between the long-lived ``GET /sse`` connection and the follow-up
@@ -84,9 +90,12 @@ def resolve_request_token() -> str:
     try:
         request = get_http_request()
     except RuntimeError:
+        if settings.token:
+            return settings.token
         raise ValueError(
             "no Open WebUI identity available: stdio transport has no "
-            "per-request channel to supply one"
+            "per-request channel to supply one, and no OPENWEBUI_API_KEY "
+            "is configured as a fallback"
         ) from None
 
     auth_header = request.headers.get("authorization", "")
@@ -173,7 +182,7 @@ def create_server(
         argument of the ``ask`` tool.
         """
         owui = client or OpenWebUIClient(
-            base_url=settings.base_url, token=resolve_request_token()
+            base_url=settings.base_url, token=resolve_request_token(settings)
         )
         return await asyncio.to_thread(_list_models_sync, owui)
 
@@ -248,7 +257,9 @@ def create_server(
         # that instance's identity wins unconditionally, including for the
         # tools-enabled Socket.IO path below, which takes a bare token= rather
         # than the client object itself.
-        resolved_token = "" if client is not None else resolve_request_token()
+        resolved_token = (
+            "" if client is not None else resolve_request_token(settings)
+        )
         owui = client or OpenWebUIClient(
             base_url=settings.base_url, token=resolved_token
         )

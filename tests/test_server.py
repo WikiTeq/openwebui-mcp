@@ -360,18 +360,41 @@ def test_no_auth_provider_configured() -> None:
     assert server.auth is None
 
 
-def test_resolve_request_token_stdio_always_raises(
+def _raise_no_request() -> Any:
+    raise RuntimeError("no active HTTP request")
+
+
+def test_resolve_request_token_stdio_raises_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """stdio has no per-request channel and no configured fallback - a tool
-    call made over stdio always fails with a clear error."""
-
-    def _raise() -> Any:
-        raise RuntimeError("no active HTTP request")
-
-    monkeypatch.setattr("openwebui_mcp.server.get_http_request", _raise)
+    """stdio has no per-request channel; with no OPENWEBUI_API_KEY configured
+    either, a tool call made over stdio fails with a clear error."""
+    monkeypatch.setattr("openwebui_mcp.server.get_http_request", _raise_no_request)
     with pytest.raises(ValueError, match="no Open WebUI identity available"):
-        resolve_request_token()
+        resolve_request_token(_fake_settings())
+
+
+def test_resolve_request_token_stdio_uses_settings_token_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stdio falls back to settings.token (OPENWEBUI_API_KEY) when set."""
+    monkeypatch.setattr("openwebui_mcp.server.get_http_request", _raise_no_request)
+    assert (
+        resolve_request_token(_fake_settings(token="sk-stdio-fallback"))
+        == "sk-stdio-fallback"
+    )
+
+
+def test_resolve_request_token_http_ignores_settings_token_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: settings.token must never leak into an HTTP request that
+    supplies no credential of its own - the stdio fallback is stdio-only."""
+    monkeypatch.setattr(
+        "openwebui_mcp.server.get_http_request", lambda: _fake_request()
+    )
+    with pytest.raises(ValueError, match="no Open WebUI identity supplied"):
+        resolve_request_token(_fake_settings(token="sk-stdio-fallback"))
 
 
 def _fake_request(
@@ -390,7 +413,7 @@ def test_resolve_request_token_uses_bearer_header(
         "openwebui_mcp.server.get_http_request",
         lambda: _fake_request(headers={"authorization": "Bearer sk-caller"}),
     )
-    assert resolve_request_token() == "sk-caller"
+    assert resolve_request_token(_fake_settings()) == "sk-caller"
 
 
 def test_resolve_request_token_uses_apikey_query_param(
@@ -401,7 +424,7 @@ def test_resolve_request_token_uses_apikey_query_param(
         "openwebui_mcp.server.get_http_request",
         lambda: _fake_request(query_params={"apiKey": "sk-caller"}),
     )
-    assert resolve_request_token() == "sk-caller"
+    assert resolve_request_token(_fake_settings()) == "sk-caller"
 
 
 def test_resolve_request_token_bearer_header_wins_over_query_param(
@@ -415,7 +438,7 @@ def test_resolve_request_token_bearer_header_wins_over_query_param(
             headers={"authorization": "Bearer sk-from-header"},
         ),
     )
-    assert resolve_request_token() == "sk-from-header"
+    assert resolve_request_token(_fake_settings()) == "sk-from-header"
 
 
 def test_resolve_request_token_empty_bearer_falls_through_to_query_param(
@@ -431,7 +454,7 @@ def test_resolve_request_token_empty_bearer_falls_through_to_query_param(
             headers={"authorization": "Bearer "},
         ),
     )
-    assert resolve_request_token() == "sk-from-query"
+    assert resolve_request_token(_fake_settings()) == "sk-from-query"
 
 
 def test_resolve_request_token_empty_bearer_alone_raises(
@@ -444,7 +467,7 @@ def test_resolve_request_token_empty_bearer_alone_raises(
         lambda: _fake_request(headers={"authorization": "Bearer "}),
     )
     with pytest.raises(ValueError, match="no Open WebUI identity supplied"):
-        resolve_request_token()
+        resolve_request_token(_fake_settings())
 
 
 def test_resolve_request_token_http_raises_without_credential(
@@ -455,7 +478,7 @@ def test_resolve_request_token_http_raises_without_credential(
         "openwebui_mcp.server.get_http_request", lambda: _fake_request()
     )
     with pytest.raises(ValueError, match="no Open WebUI identity supplied"):
-        resolve_request_token()
+        resolve_request_token(_fake_settings())
 
 
 @pytest.mark.anyio

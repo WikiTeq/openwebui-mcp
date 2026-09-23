@@ -11,6 +11,8 @@ _AMBIENT = (
     "OPENWEBUI_BASE_URL",
     "OPENWEBUI_URL",
     "OWUI_URL",
+    "OPENWEBUI_API_KEY",
+    "OWUI_API_KEY",
     "OPENWEBUI_DEFAULT_MODEL",
     "OWUI_DEFAULT_MODEL",
     "OPENWEBUI_ENFORCE_DEFAULT_MODEL",
@@ -32,12 +34,25 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_from_env_basic(monkeypatch: pytest.MonkeyPatch) -> None:
-    """base_url alone is enough - there is no Open WebUI token setting."""
+    """base_url alone is enough; token is optional (stdio-only fallback)."""
     monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://owui:8080")
     s = Settings.from_env()
     assert s.base_url == "http://owui:8080"
+    assert s.token is None
     assert s.transport == "stdio"
     assert s.timeout_ms == 120_000
+
+
+def test_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
+    monkeypatch.setenv("OPENWEBUI_API_KEY", "sk-configured")
+    assert Settings.from_env().token == "sk-configured"
+
+
+def test_token_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENWEBUI_BASE_URL", "http://h:1")
+    monkeypatch.setenv("OWUI_API_KEY", "sk-alias")
+    assert Settings.from_env().token == "sk-alias"
 
 
 def test_from_env_missing_base_url_raises() -> None:
